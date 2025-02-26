@@ -491,3 +491,142 @@ func (r *Repository) GetRemoteBranches() ([]string, error) {
 
 	return branches, nil
 }
+
+// FilterRepositories filters repositories based on host, org, and repo
+func FilterRepositories(repositories []*Repository, host, org, repo string) []*Repository {
+	if host == "" && org == "" && repo == "" {
+		return repositories
+	}
+
+	var filtered []*Repository
+
+	for _, r := range repositories {
+		if host != "" && r.Host != host {
+			continue
+		}
+
+		if org != "" && r.Organization != org {
+			continue
+		}
+
+		if repo != "" && r.Name != repo {
+			continue
+		}
+
+		filtered = append(filtered, r)
+	}
+
+	return filtered
+}
+
+// IsGitRepo checks if a directory is a git repository
+func IsGitRepo(path string) bool {
+	gitDir := filepath.Join(path, ".git")
+	info, err := os.Stat(gitDir)
+	return err == nil && info.IsDir()
+}
+
+// CreateRepositoryFromPath creates a Repository object from a path
+func CreateRepositoryFromPath(path string) (*Repository, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract host, organization, and name from path
+	// This is a simplified approach and may need to be adjusted
+	parts := strings.Split(absPath, string(os.PathSeparator))
+
+	// We need at least 3 parts for host/org/repo
+	if len(parts) < 3 {
+		return &Repository{
+			Path: absPath,
+			Name: filepath.Base(absPath),
+		}, nil
+	}
+
+	// Try to extract host, org, repo from path
+	name := parts[len(parts)-1]
+	org := parts[len(parts)-2]
+	host := parts[len(parts)-3]
+
+	// Validate that host looks like a domain
+	if !strings.Contains(host, ".") {
+		return &Repository{
+			Path: absPath,
+			Name: name,
+		}, nil
+	}
+
+	return &Repository{
+		Host:         host,
+		Organization: org,
+		Name:         name,
+		Path:         absPath,
+	}, nil
+}
+
+// FindRepositories finds repositories based on filters
+func FindRepositories(rootDir, host, org, repo, path string, all bool) ([]*Repository, error) {
+	var repositories []*Repository
+
+	// If path is specified, only check that path
+	if path != "" {
+		// Check if path is a git repository
+		if IsGitRepo(path) {
+			repository, err := CreateRepositoryFromPath(path)
+			if err != nil {
+				return nil, err
+			}
+			repositories = append(repositories, repository)
+		} else {
+			// Check if path contains git repositories
+			err := filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+
+				if info.IsDir() && IsGitRepo(p) {
+					repository, err := CreateRepositoryFromPath(p)
+					if err != nil {
+						return err
+					}
+					repositories = append(repositories, repository)
+					return filepath.SkipDir
+				}
+
+				return nil
+			})
+
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		return FilterRepositories(repositories, host, org, repo), nil
+	}
+
+	// Always walk through the rootDir from config
+	err := filepath.Walk(rootDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() && IsGitRepo(p) {
+			repository, err := CreateRepositoryFromPath(p)
+			if err != nil {
+				return err
+			}
+			repositories = append(repositories, repository)
+			return filepath.SkipDir
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return FilterRepositories(repositories, host, org, repo), nil
+}

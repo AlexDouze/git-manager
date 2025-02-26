@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/alexDouze/gitm/pkg/config"
-	"github.com/alexDouze/gitm/pkg/ui"
-	tea "github.com/charmbracelet/bubbletea"
+	"github.com/alexDouze/gitm/pkg/git"
+	"github.com/alexDouze/gitm/pkg/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -31,7 +31,7 @@ branch status, and other important information.`,
 		}
 
 		// Find repositories based on filters
-		repositories, err := findRepositories(cfg.RootDirectory, hostFilter, organizationFilter, repositoryFilter, pathFilter, allRepositories)
+		repositories, err := git.FindRepositories(cfg.RootDirectory, hostFilter, organizationFilter, repositoryFilter, pathFilter, allRepositories)
 		if err != nil {
 			return fmt.Errorf("failed to find repositories: %w", err)
 		}
@@ -46,16 +46,11 @@ branch status, and other important information.`,
 			if err := repo.Update(true, false); err != nil {
 				fmt.Printf("Warning: failed to fetch remote branches for %s: %v\n", repo.Path, err)
 			}
-		}
-
-		// Create and start the BubbleTea program
-		p := tea.NewProgram(
-			ui.NewStatusModel(repositories),
-			tea.WithAltScreen(),
-		)
-
-		if _, err := p.Run(); err != nil {
-			return fmt.Errorf("error running UI: %w", err)
+			status, err := repo.Status()
+			if err != nil {
+				fmt.Printf("Warning: failed to get status for %s: %v\n", repo.Path, err)
+			}
+			tui.StatusRender(status)
 		}
 
 		return nil

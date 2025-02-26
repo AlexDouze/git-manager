@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/alexDouze/gitm/pkg/config"
+	"github.com/alexDouze/gitm/pkg/git"
 	"github.com/alexDouze/gitm/pkg/ui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -28,7 +29,7 @@ Can also prune remote-tracking branches that no longer exist on the remote.`,
 		}
 
 		// Find repositories based on filters
-		repositories, err := findRepositories(cfg.RootDirectory, hostFilter, organizationFilter, repositoryFilter, pathFilter, allRepositories)
+		repositories, err := git.FindRepositories(cfg.RootDirectory, hostFilter, organizationFilter, repositoryFilter, pathFilter, allRepositories)
 		if err != nil {
 			return fmt.Errorf("failed to find repositories: %w", err)
 		}
