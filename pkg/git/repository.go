@@ -292,7 +292,6 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 		resultChan := make(chan BranchUpdateResult, len(lines))
 
 		var wg sync.WaitGroup
-		var mu sync.Mutex
 
 		for _, line := range lines {
 			wg.Add(1)
@@ -300,10 +299,12 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 				defer wg.Done()
 				branch := parseBranchInfo(line)
 				if branch != nil {
-					mu.Lock()
-					defer mu.Unlock()
-					// Pull changes for current branch
-					_, err = r.execGitCommand(true, "pull", "--rebase")
+					var err error
+					// Pull changes only for the branch being processed
+					if branch.Current {
+						// Pull changes for current branch
+						_, err = r.execGitCommand(true, "pull", "--rebase")
+					}
 
 					resultChan <- BranchUpdateResult{
 						Branch: branch,
