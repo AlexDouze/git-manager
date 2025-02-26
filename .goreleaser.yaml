@@ -27,6 +27,7 @@ archives:
       {{- .Version }}_
       {{- .Os }}_
       {{- .Arch }}
+    
     formats:
     - tar.gz
     format_overrides:
@@ -57,7 +58,7 @@ changelog:
 release:
   github:
     owner: alexDouze
-    name: gitm
+    name: git-manager
   prerelease: auto
   draft: false
   name_template: "v{{ .Version }}"
