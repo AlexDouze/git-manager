@@ -3,11 +3,11 @@ package cmd
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/alexDouze/gitm/pkg/config"
 	"github.com/alexDouze/gitm/pkg/git"
-	"github.com/alexDouze/gitm/pkg/ui"
-	tea "github.com/charmbracelet/bubbletea"
+	"github.com/alexDouze/gitm/pkg/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -38,15 +38,52 @@ Can also prune remote-tracking branches that no longer exist on the remote.`,
 			fmt.Println("No repositories found matching the specified filters.")
 			return nil
 		}
+		// Create a channel to collect update results
+		resultChan := make(chan *git.UpdateResult, len(repositories))
 
-		// Create and start the BubbleTea program
-		p := tea.NewProgram(
-			ui.NewUpdateModel(repositories, fetchOnly, prune),
-			tea.WithAltScreen(),
-		)
+		// Create a wait group to wait for all goroutines to complete
+		var wg sync.WaitGroup
+		wg.Add(len(repositories))
 
-		if _, err := p.Run(); err != nil {
-			return fmt.Errorf("error running UI: %w", err)
+		// Process repositories in parallel
+		for _, repo := range repositories {
+			go func(r *git.Repository) {
+				defer wg.Done()
+
+				// Update repository (fetch remote branches)
+				updateResult, updateErr := r.Update(false, false)
+
+				// Send result to channel
+				resultChan <- updateResult
+
+				// Log update error separately
+				if updateErr != nil {
+					fmt.Printf("Warning: failed to update remote branches for %s: %v\n", r.Path, updateErr)
+				}
+			}(repo)
+		}
+
+		// Wait for all goroutines to complete
+		go func() {
+			wg.Wait()
+			close(resultChan)
+		}()
+
+		// Collect results
+		results := make(map[string]*git.UpdateResult)
+		for result := range resultChan {
+			results[result.Repository.Path] = result
+		}
+
+		// Display results in the same order as the original repositories list
+		for _, repo := range repositories {
+			result, exists := results[repo.Path]
+			if !exists {
+				fmt.Printf("Warning: no result found for %s\n", repo.Path)
+				continue
+			}
+
+			tui.UpdateRender(result)
 		}
 
 		return nil

@@ -44,11 +44,11 @@ branch status, and other important information.`,
 		}
 
 		// Create a channel to collect status results
-		type repoResult struct {
+		type statusRepoResult struct {
 			status *git.RepositoryStatus
 			err    error
 		}
-		resultChan := make(chan repoResult, len(repositories))
+		resultChan := make(chan statusRepoResult, len(repositories))
 
 		// Create a wait group to wait for all goroutines to complete
 		var wg sync.WaitGroup
@@ -60,13 +60,13 @@ branch status, and other important information.`,
 				defer wg.Done()
 
 				// Update repository (fetch remote branches)
-				updateErr := r.Update(true, false)
+				_, updateErr := r.Update(true, false)
 
 				// Get repository status
 				status, statusErr := r.Status()
 
 				// Send result to channel
-				resultChan <- repoResult{
+				resultChan <- statusRepoResult{
 					status: status,
 					err:    statusErr,
 				}
@@ -85,7 +85,7 @@ branch status, and other important information.`,
 		}()
 
 		// Collect results
-		results := make(map[string]repoResult)
+		results := make(map[string]statusRepoResult)
 		for result := range resultChan {
 			results[result.status.Repository.Path] = result
 		}
@@ -105,9 +105,9 @@ branch status, and other important information.`,
 			}
 			if result.status.HasIssues() {
 				repoWithIssues++
-				if displayAll {
-					tui.StatusRender(result.status)
-				}
+				tui.StatusRender(result.status)
+			} else if displayAll {
+				tui.StatusRender(result.status)
 			}
 		}
 		if repoWithIssues == 0 && !displayAll {

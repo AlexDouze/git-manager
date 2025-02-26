@@ -81,8 +81,6 @@ func (r *Repository) execGitCommand(stdout bool, args ...string) ([]byte, error)
 	cmd := exec.Command("git", args...)
 
 	if stdout {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
 		err := cmd.Run()
 		return nil, err
 	}
@@ -216,8 +214,18 @@ func (r *Repository) getStashInformation(status *RepositoryStatus) error {
 	return nil
 }
 
-// Update updates the repository (fetch and optionally pull)
-func (r *Repository) Update(fetchOnly, prune bool) error {
+type UpdateResult struct {
+	Repository          *Repository
+	BranchUpdateResults map[string]BranchUpdateResult
+	HasErrors           bool
+}
+type BranchUpdateResult struct {
+	Branch *BranchInfo
+	Err    error
+}
+
+// Update updates the repository (fetch and optionally pull), UpdateResult is nil if fetchOnly is true
+func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 	// Fetch from all remotes
 	fetchArgs := []string{"fetch"}
 	if prune {
@@ -226,28 +234,69 @@ func (r *Repository) Update(fetchOnly, prune bool) error {
 
 	_, err := r.execGitCommand(true, fetchArgs...)
 	if err != nil {
-		return fmt.Errorf("failed to fetch: %w", err)
+		return nil, fmt.Errorf("failed to fetch: %w", err)
+	}
+
+	// Check if there are uncommitted changes
+	status, err := r.Status()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get repository status: %w", err)
+	}
+
+	if status.HasUncommittedChanges {
+		return nil, errors.New("cannot update: repository has uncommitted changes")
 	}
 
 	if !fetchOnly {
-		// Check if there are uncommitted changes
-		status, err := r.Status()
+		output, err := r.execGitCommand(false, "branch", "-vv")
 		if err != nil {
-			return fmt.Errorf("failed to get repository status: %w", err)
+			return nil, err
 		}
 
-		if status.HasUncommittedChanges {
-			return errors.New("cannot update: repository has uncommitted changes")
+		// Parse branch output
+		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+
+		resultChan := make(chan BranchUpdateResult, len(lines))
+
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+
+		for _, line := range lines {
+			wg.Add(1)
+			go func(line string) {
+				defer wg.Done()
+				branch := parseBranchInfo(line)
+				if branch != nil {
+					mu.Lock()
+					defer mu.Unlock()
+					// Pull changes for current branch
+					_, err = r.execGitCommand(true, "pull", "--rebase")
+
+					resultChan <- BranchUpdateResult{
+						Branch: branch,
+						Err:    err,
+					}
+				}
+			}(line)
 		}
 
-		// Pull changes for current branch
-		_, err = r.execGitCommand(true, "pull", "--rebase")
-		if err != nil {
-			return fmt.Errorf("failed to pull: %w", err)
+		go func() {
+			wg.Wait()
+			close(resultChan)
+		}()
+		// Collect results
+		results := make(map[string]BranchUpdateResult)
+		hasError := false
+		for result := range resultChan {
+			results[result.Branch.Name] = result
+			if result.Err != nil {
+				hasError = true
+			}
 		}
+		return &UpdateResult{Repository: r, BranchUpdateResults: results, HasErrors: hasError}, nil
 	}
 
-	return nil
+	return nil, nil
 }
 
 // PruneBranches prunes branches based on criteria
