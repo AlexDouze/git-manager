@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // Repository represents a Git repository with its metadata
@@ -164,29 +165,39 @@ func (r *Repository) getBranchInformation(status *RepositoryStatus) error {
 
 	// Parse branch output
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
 	for _, line := range lines {
-		branch := parseBranchInfo(line)
-		if branch != nil {
-			status.Branches = append(status.Branches, *branch)
+		wg.Add(1)
+		go func(line string) {
+			defer wg.Done()
+			branch := parseBranchInfo(line)
+			if branch != nil {
+				mu.Lock()
+				defer mu.Unlock()
+				status.Branches = append(status.Branches, *branch)
 
-			if branch.Current {
-				status.CurrentBranch = branch.Name
-			}
+				if branch.Current {
+					status.CurrentBranch = branch.Name
+				}
 
-			if branch.RemoteGone {
-				status.HasBranchesWithRemoteGone = true
-			}
+				if branch.RemoteGone {
+					status.HasBranchesWithRemoteGone = true
+				}
 
-			if branch.NoRemoteTracking {
-				status.HasBranchesWithoutRemote = true
-			}
+				if branch.NoRemoteTracking {
+					status.HasBranchesWithoutRemote = true
+				}
 
-			if branch.Behind > 0 {
-				status.HasBranchesBehindRemote = true
+				if branch.Behind > 0 {
+					status.HasBranchesBehindRemote = true
+				}
 			}
-		}
+		}(line)
 	}
 
+	wg.Wait()
 	return nil
 }
 
