@@ -17,7 +17,6 @@ var (
 	repositoryFilter   string
 	pathFilter         string
 	allRepositories    bool
-	displayAll         bool
 )
 
 var statusCmd = &cobra.Command{
@@ -43,13 +42,6 @@ branch status, and other important information.`,
 			return nil
 		}
 
-		// Create a channel to collect status results
-		type statusRepoResult struct {
-			status *git.RepositoryStatus
-			err    error
-		}
-		resultChan := make(chan statusRepoResult, len(repositories))
-
 		// Create a wait group to wait for all goroutines to complete
 		var wg sync.WaitGroup
 		wg.Add(len(repositories))
@@ -61,59 +53,20 @@ branch status, and other important information.`,
 
 				// Update repository (fetch remote branches)
 				_, updateErr := r.Update(true, false)
-
-				// Get repository status
-				status, statusErr := r.Status()
-
-				// Send result to channel
-				resultChan <- statusRepoResult{
-					status: status,
-					err:    statusErr,
-				}
-
-				// Log update error separately
 				if updateErr != nil {
 					fmt.Printf("Warning: failed to fetch remote branches for %s: %v\n", r.Path, updateErr)
 				}
+				// Get repository status
+				status, statusErr := r.Status()
+				if statusErr != nil {
+					fmt.Printf("Warning: failed to get status for %s: %v\n", r.Path, statusErr)
+				}
+				tui.StatusRender(status)
+
 			}(repo)
 		}
 
-		// Wait for all goroutines to complete
-		go func() {
-			wg.Wait()
-			close(resultChan)
-		}()
-
-		// Collect results
-		results := make(map[string]statusRepoResult)
-		for result := range resultChan {
-			results[result.status.Repository.Path] = result
-		}
-		repoWithIssues := 0
-
-		// Display results in the same order as the original repositories list
-		for _, repo := range repositories {
-			result, exists := results[repo.Path]
-			if !exists {
-				fmt.Printf("Warning: no result found for %s\n", repo.Path)
-				continue
-			}
-
-			if result.err != nil {
-				fmt.Printf("Warning: failed to get status for %s: %v\n", result.status.Repository.Path, result.err)
-				continue
-			}
-			if result.status.HasIssues() {
-				repoWithIssues++
-				tui.StatusRender(result.status)
-			} else if displayAll {
-				tui.StatusRender(result.status)
-			}
-		}
-		if repoWithIssues == 0 && !displayAll {
-			tui.AllStatusCleanRender()
-		}
-
+		wg.Wait()
 		return nil
 	},
 }
@@ -127,5 +80,4 @@ func init() {
 	statusCmd.Flags().StringVar(&repositoryFilter, "repo", "", "Filter repositories by name")
 	statusCmd.Flags().StringVar(&pathFilter, "path", "", "Filter repositories by path")
 	statusCmd.Flags().BoolVar(&allRepositories, "all", false, "Check all repositories")
-	statusCmd.Flags().BoolVar(&displayAll, "display-all", false, "Display all repositories, even if they have no issues")
 }

@@ -38,8 +38,6 @@ Can also prune remote-tracking branches that no longer exist on the remote.`,
 			fmt.Println("No repositories found matching the specified filters.")
 			return nil
 		}
-		// Create a channel to collect update results
-		resultChan := make(chan *git.UpdateResult, len(repositories))
 
 		// Create a wait group to wait for all goroutines to complete
 		var wg sync.WaitGroup
@@ -52,39 +50,14 @@ Can also prune remote-tracking branches that no longer exist on the remote.`,
 
 				// Update repository (fetch remote branches)
 				updateResult, updateErr := r.Update(false, false)
-
-				// Send result to channel
-				resultChan <- updateResult
-
-				// Log update error separately
 				if updateErr != nil {
 					fmt.Printf("Warning: failed to update remote branches for %s: %v\n", r.Path, updateErr)
 				}
+				tui.UpdateRender(updateResult)
+
 			}(repo)
 		}
-
-		// Wait for all goroutines to complete
-		go func() {
-			wg.Wait()
-			close(resultChan)
-		}()
-
-		// Collect results
-		results := make(map[string]*git.UpdateResult)
-		for result := range resultChan {
-			results[result.Repository.Path] = result
-		}
-
-		// Display results in the same order as the original repositories list
-		for _, repo := range repositories {
-			result, exists := results[repo.Path]
-			if !exists {
-				fmt.Printf("Warning: no result found for %s\n", repo.Path)
-				continue
-			}
-
-			tui.UpdateRender(result)
-		}
+		wg.Wait()
 
 		return nil
 	},
