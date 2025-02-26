@@ -33,3 +33,7 @@ func StatusRender(status *git.RepositoryStatus) {
 	}
 	fmt.Println()
 }
+
+func AllStatusCleanRender() {
+	fmt.Println(" ✅ All repositories are clean")
+}

@@ -89,6 +89,7 @@ branch status, and other important information.`,
 		for result := range resultChan {
 			results[result.status.Repository.Path] = result
 		}
+		repoWithIssues := 0
 
 		// Display results in the same order as the original repositories list
 		for _, repo := range repositories {
@@ -102,9 +103,15 @@ branch status, and other important information.`,
 				fmt.Printf("Warning: failed to get status for %s: %v\n", result.status.Repository.Path, result.err)
 				continue
 			}
-			if result.status.HasIssues() || displayAll {
-				tui.StatusRender(result.status)
+			if result.status.HasIssues() {
+				repoWithIssues++
+				if displayAll {
+					tui.StatusRender(result.status)
+				}
 			}
+		}
+		if repoWithIssues == 0 && !displayAll {
+			tui.AllStatusCleanRender()
 		}
 
 		return nil
