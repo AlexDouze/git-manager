@@ -38,4 +38,8 @@ build-windows:
 build-macos:
 	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GOBUILD) -o $(BINARY_DIR)/$(BINARY_NAME)_macos -v
 
-.PHONY: all build test clean run deps build-linux build-windows build-macos
+# Docker
+docker-build:
+	docker build -t $(BINARY_NAME):latest .
+
+.PHONY: all build test clean run deps build-linux build-windows build-macos docker-build
