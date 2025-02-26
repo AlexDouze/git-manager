@@ -11,17 +11,74 @@ import (
 	"sync"
 )
 
+// GitCommandExecutor defines an interface for executing git commands
+type GitCommandExecutor interface {
+	Execute(repoPath string, stdout bool, args ...string) ([]byte, error)
+}
+
+// DefaultGitCommandExecutor is the default implementation of GitCommandExecutor
+type DefaultGitCommandExecutor struct{}
+
+// Execute executes a git command with the given arguments
+// If stdout is true, command output is connected to os.Stdout and os.Stderr
+func (e *DefaultGitCommandExecutor) Execute(repoPath string, stdout bool, args ...string) ([]byte, error) {
+	// Insert the repository path argument if provided
+	if repoPath != "" {
+		if len(args) > 0 {
+			if args[0] == "clone" {
+				args = append([]string{"-C", filepath.Dir(repoPath)}, args...)
+			} else {
+				args = append([]string{"-C", repoPath}, args...)
+			}
+		}
+	}
+
+	cmd := exec.Command("git", args...)
+
+	if stdout {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		err := cmd.Run()
+		return nil, err
+	}
+
+	return cmd.Output()
+}
+
 // Repository represents a Git repository with its metadata
 type Repository struct {
-	Host         string // Host (e.g., github.com)
-	Organization string // Organization or user (e.g., octocat)
-	Name         string // Repository name
-	Path         string // Local filesystem path
+	Host         string             // Host (e.g., github.com)
+	Organization string             // Organization or user (e.g., octocat)
+	Name         string             // Repository name
+	Path         string             // Local filesystem path
+	gitExecutor  GitCommandExecutor // Git command executor
+}
+
+// NewRepository creates a new Repository with default GitCommandExecutor
+func NewRepository() *Repository {
+	return &Repository{
+		gitExecutor: &DefaultGitCommandExecutor{},
+	}
+}
+
+// SetGitCommandExecutor sets a custom GitCommandExecutor (useful for testing)
+func (r *Repository) SetGitCommandExecutor(executor GitCommandExecutor) {
+	r.gitExecutor = executor
+}
+
+// execGitCommand is a helper method that uses the GitCommandExecutor
+func (r *Repository) execGitCommand(stdout bool, args ...string) ([]byte, error) {
+	// Initialize with default executor if not set
+	if r.gitExecutor == nil {
+		r.gitExecutor = &DefaultGitCommandExecutor{}
+	}
+
+	return r.gitExecutor.Execute(r.Path, stdout, args...)
 }
 
 // ParseURL parses a git URL and extracts host, organization, and repository name
 func ParseURL(url string) (*Repository, error) {
-	repo := &Repository{}
+	repo := NewRepository()
 
 	// Remove trailing .git if present
 	url = strings.TrimSuffix(url, ".git")
@@ -62,30 +119,6 @@ func ParseURL(url string) (*Repository, error) {
 	}
 
 	return nil, errors.New("unsupported git URL format")
-}
-
-// execGitCommand executes a git command with the given arguments
-// If stdout is true, command output is connected to os.Stdout and os.Stderr
-func (r *Repository) execGitCommand(stdout bool, args ...string) ([]byte, error) {
-	// Insert the repository path argument if provided
-	if r.Path != "" {
-		if len(args) > 0 {
-			if args[0] == "clone" {
-				args = append([]string{"-C", filepath.Dir(r.Path)}, args...)
-			} else {
-				args = append([]string{"-C", r.Path}, args...)
-			}
-		}
-	}
-
-	cmd := exec.Command("git", args...)
-
-	if stdout {
-		err := cmd.Run()
-		return nil, err
-	}
-
-	return cmd.Output()
 }
 
 // Clone clones a repository to the specified root directory
@@ -603,10 +636,10 @@ func CreateRepositoryFromPath(path string) (*Repository, error) {
 
 	// We need at least 3 parts for host/org/repo
 	if len(parts) < 3 {
-		return &Repository{
-			Path: absPath,
-			Name: filepath.Base(absPath),
-		}, nil
+		repo := NewRepository()
+		repo.Path = absPath
+		repo.Name = filepath.Base(absPath)
+		return repo, nil
 	}
 
 	// Try to extract host, org, repo from path
@@ -616,18 +649,18 @@ func CreateRepositoryFromPath(path string) (*Repository, error) {
 
 	// Validate that host looks like a domain
 	if !strings.Contains(host, ".") {
-		return &Repository{
-			Path: absPath,
-			Name: name,
-		}, nil
+		repo := NewRepository()
+		repo.Path = absPath
+		repo.Name = name
+		return repo, nil
 	}
 
-	return &Repository{
-		Host:         host,
-		Organization: org,
-		Name:         name,
-		Path:         absPath,
-	}, nil
+	repo := NewRepository()
+	repo.Host = host
+	repo.Organization = org
+	repo.Name = name
+	repo.Path = absPath
+	return repo, nil
 }
 
 // FindRepositories finds repositories based on filters
