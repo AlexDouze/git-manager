@@ -31,4 +31,5 @@ func StatusRender(status *git.RepositoryStatus) {
 	if !hasIssues {
 		fmt.Println("✅ Repository is clean")
 	}
+	fmt.Println()
 }

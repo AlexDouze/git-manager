@@ -362,6 +362,10 @@ type RepositoryStatus struct {
 	StashCount                int          // Number of stashes
 }
 
+func (s RepositoryStatus) HasIssues() bool {
+	return s.HasUncommittedChanges || s.HasBranchesWithoutRemote || s.HasBranchesWithRemoteGone || s.HasBranchesBehindRemote
+}
+
 // parseBranchInfo parses a line from git branch -vv output
 func parseBranchInfo(line string) *BranchInfo {
 	line = strings.TrimSpace(line)

@@ -3,6 +3,7 @@ package cmd
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/alexDouze/gitm/pkg/config"
 	"github.com/alexDouze/gitm/pkg/git"
@@ -41,16 +42,68 @@ branch status, and other important information.`,
 			return nil
 		}
 
-		// Fetch all remote branches for each repository
+		// Create a channel to collect status results
+		type repoResult struct {
+			status *git.RepositoryStatus
+			err    error
+		}
+		resultChan := make(chan repoResult, len(repositories))
+
+		// Create a wait group to wait for all goroutines to complete
+		var wg sync.WaitGroup
+		wg.Add(len(repositories))
+
+		// Process repositories in parallel
 		for _, repo := range repositories {
-			if err := repo.Update(true, false); err != nil {
-				fmt.Printf("Warning: failed to fetch remote branches for %s: %v\n", repo.Path, err)
+			go func(r *git.Repository) {
+				defer wg.Done()
+
+				// Update repository (fetch remote branches)
+				updateErr := r.Update(true, false)
+
+				// Get repository status
+				status, statusErr := r.Status()
+
+				// Send result to channel
+				resultChan <- repoResult{
+					status: status,
+					err:    statusErr,
+				}
+
+				// Log update error separately
+				if updateErr != nil {
+					fmt.Printf("Warning: failed to fetch remote branches for %s: %v\n", r.Path, updateErr)
+				}
+			}(repo)
+		}
+
+		// Wait for all goroutines to complete
+		go func() {
+			wg.Wait()
+			close(resultChan)
+		}()
+
+		// Collect results
+		results := make(map[string]repoResult)
+		for result := range resultChan {
+			results[result.status.Repository.Path] = result
+		}
+
+		// Display results in the same order as the original repositories list
+		for _, repo := range repositories {
+			result, exists := results[repo.Path]
+			if !exists {
+				fmt.Printf("Warning: no result found for %s\n", repo.Path)
+				continue
 			}
-			status, err := repo.Status()
-			if err != nil {
-				fmt.Printf("Warning: failed to get status for %s: %v\n", repo.Path, err)
+
+			if result.err != nil {
+				fmt.Printf("Warning: failed to get status for %s: %v\n", result.status.Repository.Path, result.err)
+				continue
 			}
-			tui.StatusRender(status)
+			if result.status.HasIssues() {
+				tui.StatusRender(result.status)
+			}
 		}
 
 		return nil
