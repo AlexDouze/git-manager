@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/alexDouze/gitm/pkg/config"
+	"github.com/alexDouze/gitm/pkg/ui"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 )
 
@@ -20,13 +22,31 @@ var updateCmd = &cobra.Command{
 Can also prune remote-tracking branches that no longer exist on the remote.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Load configuration
-		_, err := config.LoadConfig()
+		cfg, err := config.LoadConfig()
 		if err != nil {
 			return fmt.Errorf("failed to load configuration: %w", err)
 		}
 
-		// TODO: Implement repository update logic with BubbleTea UI
-		fmt.Println("Update command not fully implemented yet")
+		// Find repositories based on filters
+		repositories, err := findRepositories(cfg.RootDirectory, hostFilter, organizationFilter, repositoryFilter, pathFilter, allRepositories)
+		if err != nil {
+			return fmt.Errorf("failed to find repositories: %w", err)
+		}
+
+		if len(repositories) == 0 {
+			fmt.Println("No repositories found matching the specified filters.")
+			return nil
+		}
+
+		// Create and start the BubbleTea program
+		p := tea.NewProgram(
+			ui.NewUpdateModel(repositories, fetchOnly, prune),
+			tea.WithAltScreen(),
+		)
+
+		if _, err := p.Run(); err != nil {
+			return fmt.Errorf("error running UI: %w", err)
+		}
 
 		return nil
 	},

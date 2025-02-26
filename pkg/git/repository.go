@@ -10,18 +10,22 @@ import (
 	"strings"
 )
 
+// Repository represents a Git repository with its metadata
 type Repository struct {
-	Host         string
-	Organization string
-	Name         string
-	Path         string
+	Host         string // Host (e.g., github.com)
+	Organization string // Organization or user (e.g., octocat)
+	Name         string // Repository name
+	Path         string // Local filesystem path
 }
 
 // ParseURL parses a git URL and extracts host, organization, and repository name
 func ParseURL(url string) (*Repository, error) {
 	repo := &Repository{}
 
-	// Handle SSH URLs (git@github.com:org/repo.git)
+	// Remove trailing .git if present
+	url = strings.TrimSuffix(url, ".git")
+
+	// Handle SSH URLs (git@github.com:org/repo)
 	if strings.HasPrefix(url, "git@") {
 		parts := strings.Split(url, ":")
 		if len(parts) != 2 {
@@ -29,22 +33,22 @@ func ParseURL(url string) (*Repository, error) {
 		}
 
 		repo.Host = strings.TrimPrefix(parts[0], "git@")
-		pathParts := strings.Split(strings.TrimSuffix(parts[1], ".git"), "/")
+		pathParts := strings.Split(parts[1], "/")
 
-		if len(pathParts) != 2 {
+		if len(pathParts) < 2 {
 			return nil, errors.New("invalid repository path in SSH URL")
 		}
 
 		repo.Organization = pathParts[0]
-		repo.Name = pathParts[1]
+		repo.Name = pathParts[len(pathParts)-1]
 		return repo, nil
 	}
 
-	// Handle HTTPS URLs (https://github.com/org/repo.git)
+	// Handle HTTPS URLs (https://github.com/org/repo)
 	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") {
-		url = strings.TrimSuffix(url, ".git")
-		parts := strings.Split(strings.TrimPrefix(url, "https://"), "/")
-		parts = append(parts, strings.Split(strings.TrimPrefix(url, "http://"), "/")...)
+		// Remove protocol prefix
+		urlWithoutProtocol := strings.TrimPrefix(strings.TrimPrefix(url, "https://"), "http://")
+		parts := strings.Split(urlWithoutProtocol, "/")
 
 		if len(parts) < 3 {
 			return nil, errors.New("invalid HTTPS git URL format")
@@ -52,11 +56,31 @@ func ParseURL(url string) (*Repository, error) {
 
 		repo.Host = parts[0]
 		repo.Organization = parts[1]
-		repo.Name = parts[2]
+		repo.Name = parts[len(parts)-1]
 		return repo, nil
 	}
 
 	return nil, errors.New("unsupported git URL format")
+}
+
+// execGitCommand executes a git command with the given arguments
+// If stdout is true, command output is connected to os.Stdout and os.Stderr
+func (r *Repository) execGitCommand(stdout bool, args ...string) ([]byte, error) {
+	// Insert the repository path argument if provided
+	if r.Path != "" {
+		args = append([]string{"-C", r.Path}, args...)
+	}
+
+	cmd := exec.Command("git", args...)
+
+	if stdout {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		err := cmd.Run()
+		return nil, err
+	}
+
+	return cmd.Output()
 }
 
 // Clone clones a repository to the specified root directory
@@ -65,7 +89,7 @@ func (r *Repository) Clone(rootDir, url string, options []string) error {
 
 	// Create parent directories
 	if err := os.MkdirAll(filepath.Dir(r.Path), 0755); err != nil {
-		return err
+		return fmt.Errorf("failed to create directories: %w", err)
 	}
 
 	// Check if repository already exists
@@ -77,11 +101,8 @@ func (r *Repository) Clone(rootDir, url string, options []string) error {
 	args := append([]string{"clone"}, options...)
 	args = append(args, url, r.Path)
 
-	cmd := exec.Command("git", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	return cmd.Run()
+	_, err := r.execGitCommand(true, args...)
+	return err
 }
 
 // Status gets the status of the repository
@@ -96,10 +117,28 @@ func (r *Repository) Status() (*RepositoryStatus, error) {
 	}
 
 	// Get uncommitted changes
-	cmd := exec.Command("git", "-C", r.Path, "status", "--porcelain")
-	output, err := cmd.Output()
+	if err := r.getUncommittedChanges(status); err != nil {
+		return nil, fmt.Errorf("failed to get uncommitted changes: %w", err)
+	}
+
+	// Get branch information
+	if err := r.getBranchInformation(status); err != nil {
+		return nil, fmt.Errorf("failed to get branch information: %w", err)
+	}
+
+	// Check for stashes
+	if err := r.getStashInformation(status); err != nil {
+		return nil, fmt.Errorf("failed to get stash information: %w", err)
+	}
+
+	return status, nil
+}
+
+// getUncommittedChanges populates the uncommitted changes information
+func (r *Repository) getUncommittedChanges(status *RepositoryStatus) error {
+	output, err := r.execGitCommand(false, "status", "--porcelain")
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if len(output) > 0 {
@@ -107,11 +146,14 @@ func (r *Repository) Status() (*RepositoryStatus, error) {
 		status.UncommittedChanges = strings.Split(strings.TrimSpace(string(output)), "\n")
 	}
 
-	// Get branch information
-	cmd = exec.Command("git", "-C", r.Path, "branch", "-vv")
-	output, err = cmd.Output()
+	return nil
+}
+
+// getBranchInformation populates the branch information
+func (r *Repository) getBranchInformation(status *RepositoryStatus) error {
+	output, err := r.execGitCommand(false, "branch", "-vv")
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// Parse branch output
@@ -139,11 +181,14 @@ func (r *Repository) Status() (*RepositoryStatus, error) {
 		}
 	}
 
-	// Check for stashes
-	cmd = exec.Command("git", "-C", r.Path, "stash", "list")
-	output, err = cmd.Output()
+	return nil
+}
+
+// getStashInformation populates the stash information
+func (r *Repository) getStashInformation(status *RepositoryStatus) error {
+	output, err := r.execGitCommand(false, "stash", "list")
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	stashes := strings.Split(strings.TrimSpace(string(output)), "\n")
@@ -151,19 +196,19 @@ func (r *Repository) Status() (*RepositoryStatus, error) {
 		status.StashCount = len(stashes)
 	}
 
-	return status, nil
+	return nil
 }
 
 // Update updates the repository (fetch and optionally pull)
 func (r *Repository) Update(fetchOnly, prune bool) error {
 	// Fetch from all remotes
-	args := []string{"-C", r.Path, "fetch"}
+	fetchArgs := []string{"fetch"}
 	if prune {
-		args = append(args, "--prune")
+		fetchArgs = append(fetchArgs, "--prune")
 	}
 
-	cmd := exec.Command("git", args...)
-	if err := cmd.Run(); err != nil {
+	_, err := r.execGitCommand(true, fetchArgs...)
+	if err != nil {
 		return fmt.Errorf("failed to fetch: %w", err)
 	}
 
@@ -171,7 +216,7 @@ func (r *Repository) Update(fetchOnly, prune bool) error {
 		// Check if there are uncommitted changes
 		status, err := r.Status()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get repository status: %w", err)
 		}
 
 		if status.HasUncommittedChanges {
@@ -179,8 +224,10 @@ func (r *Repository) Update(fetchOnly, prune bool) error {
 		}
 
 		// Pull changes for current branch
-		cmd = exec.Command("git", "-C", r.Path, "pull", "--rebase")
-		return cmd.Run()
+		_, err = r.execGitCommand(true, "pull", "--rebase")
+		if err != nil {
+			return fmt.Errorf("failed to pull: %w", err)
+		}
 	}
 
 	return nil
@@ -193,34 +240,20 @@ func (r *Repository) PruneBranches(goneOnly, mergedOnly bool, dryRun bool) ([]st
 	// Get branch information
 	status, err := r.Status()
 	if err != nil {
+		return nil, fmt.Errorf("failed to get repository status: %w", err)
+	}
+
+	// Determine which branches to prune
+	branchesToPrune, err = r.identifyBranchesToPrune(status, goneOnly, mergedOnly)
+	if err != nil {
 		return nil, err
 	}
 
-	for _, branch := range status.Branches {
-		shouldPrune := false
-
-		if goneOnly && branch.RemoteGone {
-			shouldPrune = true
-		}
-
-		if mergedOnly {
-			// Check if branch is merged
-			cmd := exec.Command("git", "-C", r.Path, "branch", "--merged", "main")
-			output, err := cmd.Output()
-			if err == nil && strings.Contains(string(output), branch.Name) {
-				shouldPrune = true
-			}
-		}
-
-		if shouldPrune && !branch.Current {
-			branchesToPrune = append(branchesToPrune, branch.Name)
-		}
-	}
-
+	// Actually delete the branches if not a dry run
 	if !dryRun && len(branchesToPrune) > 0 {
 		for _, branch := range branchesToPrune {
-			cmd := exec.Command("git", "-C", r.Path, "branch", "-D", branch)
-			if err := cmd.Run(); err != nil {
+			_, err := r.execGitCommand(false, "branch", "-D", branch)
+			if err != nil {
 				return branchesToPrune, fmt.Errorf("failed to delete branch %s: %w", branch, err)
 			}
 		}
@@ -229,26 +262,61 @@ func (r *Repository) PruneBranches(goneOnly, mergedOnly bool, dryRun bool) ([]st
 	return branchesToPrune, nil
 }
 
-type BranchInfo struct {
-	Name             string
-	Current          bool
-	RemoteTracking   string
-	NoRemoteTracking bool
-	RemoteGone       bool
-	Ahead            int
-	Behind           int
+// identifyBranchesToPrune determines which branches should be pruned based on criteria
+func (r *Repository) identifyBranchesToPrune(status *RepositoryStatus, goneOnly, mergedOnly bool) ([]string, error) {
+	var branchesToPrune []string
+
+	for _, branch := range status.Branches {
+		// Skip current branch
+		if branch.Current {
+			continue
+		}
+
+		shouldPrune := false
+
+		// Check if remote is gone
+		if goneOnly && branch.RemoteGone {
+			shouldPrune = true
+		}
+
+		// Check if branch is merged
+		if mergedOnly {
+			output, err := r.execGitCommand(false, "branch", "--merged", "main")
+			if err == nil && strings.Contains(string(output), branch.Name) {
+				shouldPrune = true
+			}
+		}
+
+		if shouldPrune {
+			branchesToPrune = append(branchesToPrune, branch.Name)
+		}
+	}
+
+	return branchesToPrune, nil
 }
 
+// BranchInfo contains information about a git branch
+type BranchInfo struct {
+	Name             string // Branch name
+	Current          bool   // Whether this is the current branch
+	RemoteTracking   string // Remote tracking branch (e.g., "origin/main")
+	NoRemoteTracking bool   // Whether this branch has no remote tracking
+	RemoteGone       bool   // Whether the remote tracking branch is gone
+	Ahead            int    // Number of commits ahead of remote
+	Behind           int    // Number of commits behind remote
+}
+
+// RepositoryStatus contains the status information of a repository
 type RepositoryStatus struct {
-	Repository                *Repository
-	HasUncommittedChanges     bool
-	UncommittedChanges        []string
-	Branches                  []BranchInfo
-	CurrentBranch             string
-	HasBranchesWithoutRemote  bool
-	HasBranchesWithRemoteGone bool
-	HasBranchesBehindRemote   bool
-	StashCount                int
+	Repository                *Repository  // Reference to the repository
+	HasUncommittedChanges     bool         // Whether there are uncommitted changes
+	UncommittedChanges        []string     // List of uncommitted changes
+	Branches                  []BranchInfo // List of branches
+	CurrentBranch             string       // Name of the current branch
+	HasBranchesWithoutRemote  bool         // Whether there are branches without remote tracking
+	HasBranchesWithRemoteGone bool         // Whether there are branches with remote gone
+	HasBranchesBehindRemote   bool         // Whether there are branches behind remote
+	StashCount                int          // Number of stashes
 }
 
 // parseBranchInfo parses a line from git branch -vv output
@@ -277,8 +345,10 @@ func parseBranchInfo(line string) *BranchInfo {
 	branch.Name = parts[0]
 
 	// Check for tracking information
+	trackingInfoFound := false
 	for _, part := range parts {
 		if strings.HasPrefix(part, "[") && strings.Contains(part, "]") {
+			trackingInfoFound = true
 			trackInfo := strings.Trim(part, "[]")
 
 			if strings.Contains(trackInfo, "gone") {
@@ -307,9 +377,74 @@ func parseBranchInfo(line string) *BranchInfo {
 	}
 
 	// If no tracking info was found
-	if branch.RemoteTracking == "" {
+	if !trackingInfoFound {
 		branch.NoRemoteTracking = true
 	}
 
 	return branch
+}
+
+// Fetch fetches from remotes
+func (r *Repository) Fetch(args []string) error {
+	fetchArgs := append([]string{"fetch"}, args...)
+	_, err := r.execGitCommand(true, fetchArgs...)
+	return err
+}
+
+// GetCurrentBranch gets the current branch name
+func (r *Repository) GetCurrentBranch() (string, error) {
+	output, err := r.execGitCommand(false, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("failed to get current branch: %w", err)
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
+// Checkout checks out a branch
+func (r *Repository) Checkout(branchOrArgs ...string) error {
+	args := append([]string{"checkout"}, branchOrArgs...)
+	_, err := r.execGitCommand(true, args...)
+	if err != nil {
+		return fmt.Errorf("failed to checkout: %w", err)
+	}
+	return nil
+}
+
+// Pull pulls changes
+func (r *Repository) Pull(args []string) error {
+	pullArgs := append([]string{"pull"}, args...)
+	_, err := r.execGitCommand(true, pullArgs...)
+	if err != nil {
+		return fmt.Errorf("failed to pull: %w", err)
+	}
+	return nil
+}
+
+// GetRemoteBranches gets a list of remote branches
+func (r *Repository) GetRemoteBranches() ([]string, error) {
+	output, err := r.execGitCommand(false, "branch", "-r")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get remote branches: %w", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var branches []string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		// Skip HEAD entry
+		if strings.Contains(line, "HEAD") {
+			continue
+		}
+
+		// Extract branch name from "origin/branch-name"
+		parts := strings.SplitN(line, "/", 2)
+		if len(parts) == 2 {
+			branches = append(branches, parts[1])
+		}
+	}
+
+	return branches, nil
 }
