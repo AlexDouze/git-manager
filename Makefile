@@ -42,4 +42,8 @@ build-macos:
 docker-build:
 	docker build -t $(BINARY_NAME):latest .
 
-.PHONY: all build test clean run deps build-linux build-windows build-macos docker-build
+# GoReleaser
+release-snapshot:
+	goreleaser release --snapshot --clean
+
+.PHONY: all build test clean run deps build-linux build-windows build-macos docker-build release-snapshot

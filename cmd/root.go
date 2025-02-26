@@ -9,12 +9,20 @@ import (
 	"github.com/spf13/viper"
 )
 
+// Version information (set by goreleaser)
+var (
+	Version = "dev"
+	Commit  = "none"
+	Date    = "unknown"
+)
+
 var cfgFile string
 var rootCmd = &cobra.Command{
 	Use:   "gitm",
 	Short: "A multi-git repository manager",
 	Long: `gitm is a CLI tool for managing multiple git repositories
 from different hosts (GitHub, GitLab, etc.) with a structured folder hierarchy.`,
+	Version: Version,
 }
 
 func Execute() error {

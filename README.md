@@ -39,6 +39,30 @@ The Makefile includes targets for building on different platforms:
 - Windows: `make build-windows`
 - macOS: `make build-macos`
 
+### Releases
+
+Releases are automatically built and published using GitHub Actions and GoReleaser when a new tag is pushed to the repository.
+
+To create a new release:
+
+1. Tag the commit with a semantic version:
+   ```bash
+   git tag -a v1.0.0 -m "Release v1.0.0"
+   ```
+
+2. Push the tag to GitHub:
+   ```bash
+   git push origin v1.0.0
+   ```
+
+3. GitHub Actions will automatically build the binaries for all supported platforms and create a new release on GitHub with the artifacts.
+
+You can also run GoReleaser locally for testing (without publishing):
+
+```bash
+goreleaser release --snapshot --clean
+```
+
 ## Configuration
 
 `gitm` uses a configuration file located at `$HOME/.gitm.yaml` by default. You can initialize the configuration with:
