@@ -262,13 +262,37 @@ func (r *Repository) PruneBranches(goneOnly, mergedOnly bool, dryRun bool) ([]st
 	return branchesToPrune, nil
 }
 
+// GetDefaultBranch returns the default branch name (main or master)
+func (r *Repository) GetDefaultBranch() (string, error) {
+	// First check if main branch exists
+	_, err := r.execGitCommand(false, "show-ref", "--verify", "--quiet", "refs/heads/main")
+	if err == nil {
+		return "main", nil
+	}
+
+	// Then check if master branch exists
+	_, err = r.execGitCommand(false, "show-ref", "--verify", "--quiet", "refs/heads/master")
+	if err == nil {
+		return "master", nil
+	}
+
+	// If neither exists, return the current branch as a fallback
+	return r.GetCurrentBranch()
+}
+
 // identifyBranchesToPrune determines which branches should be pruned based on criteria
 func (r *Repository) identifyBranchesToPrune(status *RepositoryStatus, goneOnly, mergedOnly bool) ([]string, error) {
 	var branchesToPrune []string
 
+	// Get the default branch
+	defaultBranch, err := r.GetDefaultBranch()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine default branch: %w", err)
+	}
+
 	for _, branch := range status.Branches {
-		// Skip current branch
-		if branch.Current {
+		// Skip current branch and default branch
+		if branch.Current || branch.Name == defaultBranch {
 			continue
 		}
 
@@ -281,9 +305,22 @@ func (r *Repository) identifyBranchesToPrune(status *RepositoryStatus, goneOnly,
 
 		// Check if branch is merged
 		if mergedOnly {
-			output, err := r.execGitCommand(false, "branch", "--merged", "main")
-			if err == nil && strings.Contains(string(output), branch.Name) {
-				shouldPrune = true
+			// Use the already determined default branch
+			// Check if branch is merged into the default branch
+			output, err := r.execGitCommand(false, "branch", "--merged", defaultBranch)
+			if err == nil {
+				// Check if branch name is in the merged branches output
+				mergedBranches := strings.Split(strings.TrimSpace(string(output)), "\n")
+				for _, mb := range mergedBranches {
+					// Remove leading spaces and asterisk for current branch
+					mb = strings.TrimSpace(mb)
+					mb = strings.TrimPrefix(mb, "* ")
+
+					if mb == branch.Name {
+						shouldPrune = true
+						break
+					}
+				}
 			}
 		}
 

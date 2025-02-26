@@ -26,11 +26,11 @@ var (
 				BorderForeground(lipgloss.Color("62")).
 				Padding(1, 2)
 
-	branchItemStyle = lipgloss.NewStyle().PaddingLeft(4)
+	// branchItemStyle = lipgloss.NewStyle().PaddingLeft(4)
 
-	selectedBranchStyle = lipgloss.NewStyle().
-				PaddingLeft(2).
-				Foreground(lipgloss.Color("170"))
+	// selectedBranchStyle = lipgloss.NewStyle().
+	// 			PaddingLeft(2).
+	// 			Foreground(lipgloss.Color("170"))
 
 	checkboxChecked   = "✓ "
 	checkboxUnchecked = "  "
@@ -199,11 +199,17 @@ func (m *PruneModel) getBranchesForPruning(repo *git.Repository) ([]BranchItem, 
 		return nil, err
 	}
 
+	// Get the default branch
+	defaultBranch, err := repo.GetDefaultBranch()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine default branch: %w", err)
+	}
+
 	var branchItems []BranchItem
 
 	for _, branch := range status.Branches {
-		// Skip current branch
-		if branch.Current {
+		// Skip current branch and default branch
+		if branch.Current || branch.Name == defaultBranch {
 			continue
 		}
 
@@ -212,13 +218,25 @@ func (m *PruneModel) getBranchesForPruning(repo *git.Repository) ([]BranchItem, 
 			continue
 		}
 
-		// Check if branch is merged (this is a simplified check, in a real implementation
-		// you would need to check against the target branch)
+		// Check if branch is merged
 		isMerged := false
 		if m.mergedOnly {
-			// This would be a call to check if the branch is merged
-			// For this example, we'll assume some branches are merged
-			isMerged = branch.Name != "main" && branch.Name != "master" && !strings.HasPrefix(branch.Name, "feature/")
+			// Use the already determined default branch
+			output, err := exec.Command("git", "-C", repo.Path, "branch", "--merged", defaultBranch).Output()
+			if err == nil {
+				// Check if branch name is in the merged branches output
+				mergedBranches := strings.Split(strings.TrimSpace(string(output)), "\n")
+				for _, mb := range mergedBranches {
+					// Remove leading spaces and asterisk for current branch
+					mb = strings.TrimSpace(mb)
+					mb = strings.TrimPrefix(mb, "* ")
+
+					if mb == branch.Name {
+						isMerged = true
+						break
+					}
+				}
+			}
 		}
 
 		if m.mergedOnly && !isMerged {
