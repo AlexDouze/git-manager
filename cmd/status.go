@@ -17,6 +17,7 @@ var (
 	repositoryFilter   string
 	pathFilter         string
 	allRepositories    bool
+	displayAll         bool
 )
 
 var statusCmd = &cobra.Command{
@@ -101,7 +102,7 @@ branch status, and other important information.`,
 				fmt.Printf("Warning: failed to get status for %s: %v\n", result.status.Repository.Path, result.err)
 				continue
 			}
-			if result.status.HasIssues() {
+			if result.status.HasIssues() || displayAll {
 				tui.StatusRender(result.status)
 			}
 		}
@@ -119,4 +120,5 @@ func init() {
 	statusCmd.Flags().StringVar(&repositoryFilter, "repo", "", "Filter repositories by name")
 	statusCmd.Flags().StringVar(&pathFilter, "path", "", "Filter repositories by path")
 	statusCmd.Flags().BoolVar(&allRepositories, "all", false, "Check all repositories")
+	statusCmd.Flags().BoolVar(&displayAll, "display-all", false, "Display all repositories, even if they have no issues")
 }
