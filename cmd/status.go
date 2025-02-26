@@ -30,9 +30,27 @@ branch status, and other important information.`,
 			return fmt.Errorf("failed to load configuration: %w", err)
 		}
 
+		// Find repositories based on filters
+		repositories, err := findRepositories(cfg.RootDirectory, hostFilter, organizationFilter, repositoryFilter, pathFilter, allRepositories)
+		if err != nil {
+			return fmt.Errorf("failed to find repositories: %w", err)
+		}
+
+		if len(repositories) == 0 {
+			fmt.Println("No repositories found matching the specified filters.")
+			return nil
+		}
+
+		// Fetch all remote branches for each repository
+		for _, repo := range repositories {
+			if err := repo.Update(true, false); err != nil {
+				fmt.Printf("Warning: failed to fetch remote branches for %s: %v\n", repo.Path, err)
+			}
+		}
+
 		// Create and start the BubbleTea program
 		p := tea.NewProgram(
-			ui.NewStatusModel(),
+			ui.NewStatusModel(repositories),
 			tea.WithAltScreen(),
 		)
 

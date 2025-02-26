@@ -10,8 +10,14 @@ import (
 	"github.com/alexDouze/gitm/pkg/config"
 	"github.com/alexDouze/gitm/pkg/git"
 	"github.com/alexDouze/gitm/pkg/ui"
-	"github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+)
+
+var (
+	dryRun     bool
+	goneOnly   bool
+	mergedOnly bool
 )
 
 var pruneCmd = &cobra.Command{
@@ -38,9 +44,9 @@ branches with remote gone or branches that have been fully merged.`,
 		}
 
 		// Create and start the BubbleTea program
-		p := bubbletea.NewProgram(
+		p := tea.NewProgram(
 			ui.NewPruneModel(repositories, dryRun, goneOnly, mergedOnly),
-			bubbletea.WithAltScreen(),
+			tea.WithAltScreen(),
 		)
 
 		if _, err := p.Run(); err != nil {
@@ -91,42 +97,29 @@ func findRepositories(rootDir, host, org, repo, path string, all bool) ([]*git.R
 		return filterRepositories(repositories, host, org, repo), nil
 	}
 
-	// If all is true or any filter is specified, scan the root directory
-	if all || host != "" || org != "" || repo != "" {
-		err := filepath.Walk(rootDir, func(p string, info os.FileInfo, err error) error {
+	// Always walk through the rootDir from config
+	err := filepath.Walk(rootDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() && isGitRepo(p) {
+			repository, err := createRepositoryFromPath(p)
 			if err != nil {
 				return err
 			}
-
-			if info.IsDir() && isGitRepo(p) {
-				repository, err := createRepositoryFromPath(p)
-				if err != nil {
-					return err
-				}
-				repositories = append(repositories, repository)
-				return filepath.SkipDir
-			}
-
-			return nil
-		})
-
-		if err != nil {
-			return nil, err
+			repositories = append(repositories, repository)
+			return filepath.SkipDir
 		}
 
-		return filterRepositories(repositories, host, org, repo), nil
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
 	}
 
-	// If no filters are specified, use the current directory
-	if isGitRepo(".") {
-		repository, err := createRepositoryFromPath(".")
-		if err != nil {
-			return nil, err
-		}
-		repositories = append(repositories, repository)
-	}
-
-	return repositories, nil
+	return filterRepositories(repositories, host, org, repo), nil
 }
 
 // isGitRepo checks if a directory is a git repository

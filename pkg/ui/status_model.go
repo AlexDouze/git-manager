@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -33,9 +33,9 @@ type repositoryItem struct {
 func (r repositoryItem) Title() string {
 	prefix := "✓"
 	if r.status != nil {
-		if r.status.HasUncommittedChanges || r.status.HasBranchesWithRemoteGone || 
-		   r.status.HasBranchesWithoutRemote || r.status.HasBranchesBehindRemote || 
-		   r.status.StashCount > 0 {
+		if r.status.HasUncommittedChanges || r.status.HasBranchesWithRemoteGone ||
+			r.status.HasBranchesWithoutRemote || r.status.HasBranchesBehindRemote ||
+			r.status.StashCount > 0 {
 			prefix = "⚠"
 		}
 	}
@@ -46,33 +46,33 @@ func (r repositoryItem) Description() string {
 	if r.status == nil {
 		return "Status not available"
 	}
-	
+
 	var issues []string
-	
+
 	if r.status.HasUncommittedChanges {
 		issues = append(issues, fmt.Sprintf("%d uncommitted changes", len(r.status.UncommittedChanges)))
 	}
-	
+
 	if r.status.HasBranchesWithRemoteGone {
 		issues = append(issues, "branches with remote gone")
 	}
-	
+
 	if r.status.HasBranchesWithoutRemote {
 		issues = append(issues, "branches without remote")
 	}
-	
+
 	if r.status.HasBranchesBehindRemote {
 		issues = append(issues, "branches behind remote")
 	}
-	
+
 	if r.status.StashCount > 0 {
 		issues = append(issues, fmt.Sprintf("%d stashed changes", r.status.StashCount))
 	}
-	
+
 	if len(issues) == 0 {
 		return "No issues"
 	}
-	
+
 	return strings.Join(issues, ", ")
 }
 
@@ -81,11 +81,12 @@ func (r repositoryItem) FilterValue() string {
 }
 
 type StatusModel struct {
-	repositories []repositoryItem
-	list         list.Model
-	loading      bool
-	spinner      spinner.Model
-	filter       struct {
+	repositories  []repositoryItem
+	originalRepos []*git.Repository
+	list          list.Model
+	loading       bool
+	spinner       spinner.Model
+	filter        struct {
 		host         string
 		organization string
 		repository   string
@@ -96,15 +97,17 @@ type StatusModel struct {
 	width, height      int
 }
 
-func NewStatusModel() *StatusModel {
+func NewStatusModel(repositories []*git.Repository) *StatusModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
-	
+
 	m := &StatusModel{
-		spinner: s,
-		loading: true,
+		spinner:       s,
+		loading:       true,
+		repositories:  make([]repositoryItem, 0),
+		originalRepos: repositories,
 	}
-	
+
 	// Initialize the list
 	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Repositories"
@@ -113,10 +116,10 @@ func NewStatusModel() *StatusModel {
 	l.Styles.Title = titleStyle
 	l.Styles.PaginationStyle = paginationStyle
 	l.Styles.HelpStyle = helpStyle
-	
+
 	m.list = l
 	m.detailView = viewport.New(0, 0)
-	
+
 	return m
 }
 
@@ -128,53 +131,28 @@ func (m *StatusModel) Init() tea.Cmd {
 }
 
 func (m *StatusModel) loadRepositories() tea.Msg {
-	// This would be replaced with actual repository loading logic
-	// For now, we'll use dummy data
-	repos := []repositoryItem{
-		{
-			repo: &git.Repository{
-				Host:         "github.com",
-				Organization: "organization",
-				Name:         "repo1",
-				Path:         "/path/to/repo1",
-			},
-			status: &git.RepositoryStatus{
-				HasUncommittedChanges: false,
-			},
-		},
-		{
-			repo: &git.Repository{
-				Host:         "github.com",
-				Organization: "username",
-				Name:         "repo2",
-				Path:         "/path/to/repo2",
-			},
-			status: &git.RepositoryStatus{
-				HasUncommittedChanges:    true,
-				UncommittedChanges:       []string{"M src/main.go", "?? docs/new-feature.md"},
-				HasBranchesBehindRemote:  true,
-				HasBranchesWithRemoteGone: true,
-			},
-		},
-		{
-			repo: &git.Repository{
-				Host:         "gitlab.com",
-				Organization: "organization",
-				Name:         "repo3",
-				Path:         "/path/to/repo3",
-			},
-			status: &git.RepositoryStatus{
-				StashCount: 2,
-			},
-		},
+	var items []list.Item
+
+	// Process each repository
+	for _, repo := range m.originalRepos {
+		// Get repository status
+		status, err := repo.Status()
+		if err != nil {
+			// If we can't get status, still show the repository but with no status
+			items = append(items, repositoryItem{
+				repo:   repo,
+				status: nil,
+			})
+			continue
+		}
+
+		// Add repository with status to the list
+		items = append(items, repositoryItem{
+			repo:   repo,
+			status: status,
+		})
 	}
 
-	// Convert to list items
-	var items []list.Item
-	for _, r := range repos {
-		items = append(items, r)
-	}
-	
 	return loadedRepositoriesMsg{items: items}
 }
 
@@ -206,7 +184,7 @@ func (m *StatusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "f":
 			// Toggle filter view (not implemented in this example)
 		}
-	
+
 	case loadedRepositoriesMsg:
 		m.loading = false
 		m.repositories = make([]repositoryItem, len(msg.items))
@@ -214,10 +192,10 @@ func (m *StatusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.repositories[i] = item.(repositoryItem)
 		}
 		m.list.SetItems(msg.items)
-	
+
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		
+
 		if m.showDetails {
 			m.detailView.Width = msg.Width - 4
 			m.detailView.Height = msg.Height - 6
@@ -249,23 +227,23 @@ func (m *StatusModel) updateDetailView() {
 	if m.selectedRepository == nil {
 		return
 	}
-	
+
 	repo := m.selectedRepository.repo
 	status := m.selectedRepository.status
-	
+
 	var sb strings.Builder
-	
-	sb.WriteString(fmt.Sprintf("Repository Details: %s/%s/%s\n\n", 
+
+	sb.WriteString(fmt.Sprintf("Repository Details: %s/%s/%s\n\n",
 		repo.Host, repo.Organization, repo.Name))
-	
-	if status.HasUncommittedChanges || status.HasBranchesWithRemoteGone || 
-	   status.HasBranchesWithoutRemote || status.HasBranchesBehindRemote || 
-	   status.StashCount > 0 {
+
+	if status.HasUncommittedChanges || status.HasBranchesWithRemoteGone ||
+		status.HasBranchesWithoutRemote || status.HasBranchesBehindRemote ||
+		status.StashCount > 0 {
 		sb.WriteString("Status: ⚠ Issues detected\n\n")
 	} else {
 		sb.WriteString("Status: ✓ No issues\n\n")
 	}
-	
+
 	if status.HasUncommittedChanges {
 		sb.WriteString("Uncommitted Changes:\n")
 		for _, change := range status.UncommittedChanges {
@@ -273,11 +251,11 @@ func (m *StatusModel) updateDetailView() {
 		}
 		sb.WriteString("\n")
 	}
-	
+
 	sb.WriteString("Branches:\n")
 	for _, branch := range status.Branches {
 		branchStatus := "✓ Up to date"
-		
+
 		if branch.RemoteGone {
 			branchStatus = "⚠ Remote gone"
 		} else if branch.NoRemoteTracking {
@@ -295,20 +273,20 @@ func (m *StatusModel) updateDetailView() {
 			}
 			branchStatus = "⚠ " + branchStatus
 		}
-		
+
 		prefix := "  "
 		if branch.Current {
 			prefix = "* "
 		}
-		
+
 		sb.WriteString(fmt.Sprintf("%s%s: %s\n", prefix, branch.Name, branchStatus))
 	}
 	sb.WriteString("\n")
-	
+
 	sb.WriteString(fmt.Sprintf("Stashes: %d\n\n", status.StashCount))
-	
+
 	sb.WriteString("[u] Update Repository  [p] Prune Branches  [Esc] Back")
-	
+
 	m.detailView.SetContent(sb.String())
 }
 
@@ -316,7 +294,7 @@ func (m *StatusModel) View() string {
 	if m.loading {
 		return fmt.Sprintf("\n\n   %s Loading repositories...\n\n", m.spinner.View())
 	}
-	
+
 	if m.showDetails && m.selectedRepository != nil {
 		return lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -325,7 +303,7 @@ func (m *StatusModel) View() string {
 			Width(m.width - 4).
 			Render(m.detailView.View())
 	}
-	
+
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("62")).
