@@ -29,7 +29,7 @@ func LoadConfig() (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
-		config.RootDirectory = filepath.Join(home, "git-repos")
+		config.RootDirectory = filepath.Join(home, "Codebase")
 	}
 
 	return &config, nil
@@ -50,9 +50,9 @@ func InitConfig() error {
 	}
 
 	viper.SetConfigFile(filepath.Join(home, ".gitm.yaml"))
-	
+
 	// Set default values
-	viper.Set("rootDirectory", filepath.Join(home, "git-repos"))
+	viper.Set("rootDirectory", filepath.Join(home, "Codebase"))
 	viper.Set("clone.defaultOptions", "--recurse-submodules")
 
 	return viper.WriteConfig()

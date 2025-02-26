@@ -68,7 +68,13 @@ func ParseURL(url string) (*Repository, error) {
 func (r *Repository) execGitCommand(stdout bool, args ...string) ([]byte, error) {
 	// Insert the repository path argument if provided
 	if r.Path != "" {
-		args = append([]string{"-C", r.Path}, args...)
+		if len(args) > 0 {
+			if args[0] == "clone" {
+				args = append([]string{"-C", filepath.Dir(r.Path)}, args...)
+			} else {
+				args = append([]string{"-C", r.Path}, args...)
+			}
+		}
 	}
 
 	cmd := exec.Command("git", args...)

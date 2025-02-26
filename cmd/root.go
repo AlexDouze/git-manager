@@ -36,14 +36,16 @@ func initConfig() {
 			os.Exit(1)
 		}
 
+		viper.AddConfigPath(".")
 		viper.AddConfigPath(home)
 		viper.SetConfigName("gitm")
+		viper.SetConfigName(".gitm")
 		viper.SetConfigType("yaml")
 	}
 
 	viper.AutomaticEnv()
 
-	if err := viper.ReadInConfig(); err == nil {
+	if err := viper.ReadInConfig(); err != nil {
 		fmt.Println("Using config file:", viper.ConfigFileUsed())
 	}
 }
