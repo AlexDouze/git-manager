@@ -68,7 +68,8 @@ brews:
     directory: Formula
     description: "Git Manager CLI tool"
     extra_install:
-      generate_completions_from_executable(bin/"gitm", "completions")
+      chmod 0555, bin/"gitm"
+      generate_completions_from_executable(bin/"gitm", "completion")
     license: "MIT"
     test: |
       system "#{bin}/gitm", "version"

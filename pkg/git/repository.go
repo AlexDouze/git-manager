@@ -36,8 +36,6 @@ func (e *DefaultGitCommandExecutor) Execute(repoPath string, stdout bool, args .
 	cmd := exec.Command("git", args...)
 
 	if stdout {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
 		err := cmd.Run()
 		return nil, err
 	}

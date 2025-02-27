@@ -17,12 +17,13 @@ var (
 	repositoryFilter   string
 	pathFilter         string
 	allRepositories    bool
+	displayAll         bool
 )
 
 var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Check the status of repositories",
-	Long: `Check the status of git repositories, showing uncommitted changes, 
+	Long: `Check the status of git repositories, showing uncommitted changes,
 branch status, and other important information.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Load configuration
@@ -52,16 +53,16 @@ branch status, and other important information.`,
 				defer wg.Done()
 
 				// Update repository (fetch remote branches)
-				_, updateErr := r.Update(true, false)
-				if updateErr != nil {
-					fmt.Printf("Warning: failed to fetch remote branches for %s: %v\n", r.Path, updateErr)
-				}
+				r.Update(true, false)
+
 				// Get repository status
 				status, statusErr := r.Status()
 				if statusErr != nil {
 					fmt.Printf("Warning: failed to get status for %s: %v\n", r.Path, statusErr)
 				}
-				tui.StatusRender(status)
+				if status.HasIssues() || displayAll {
+					tui.StatusRender(status)
+				}
 
 			}(repo)
 		}
@@ -80,4 +81,6 @@ func init() {
 	statusCmd.Flags().StringVar(&repositoryFilter, "repo", "", "Filter repositories by name")
 	statusCmd.Flags().StringVar(&pathFilter, "path", "", "Filter repositories by path")
 	statusCmd.Flags().BoolVar(&allRepositories, "all", false, "Check all repositories")
+	statusCmd.Flags().BoolVar(&displayAll, "display-all", false, "Display all repositories")
+
 }
