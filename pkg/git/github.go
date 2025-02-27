@@ -6,6 +6,20 @@ import (
 	"os/exec"
 )
 
+// GithubCommandExecutor defines an interface for executing GitHub CLI commands
+type GithubCommandExecutor interface {
+	Execute(args ...string) ([]byte, error)
+}
+
+// DefaultGithubCommandExecutor is the default implementation of GithubCommandExecutor
+type DefaultGithubCommandExecutor struct{}
+
+// Execute executes a GitHub CLI command with the given arguments
+func (e *DefaultGithubCommandExecutor) Execute(args ...string) ([]byte, error) {
+	cmd := exec.Command("gh", args...)
+	return cmd.Output()
+}
+
 // Repository represents a GitHub repository
 type githubRepository struct {
 	Name  string `json:"name"`
@@ -17,6 +31,11 @@ type githubRepository struct {
 
 // ListGitHubRepositories lists repositories from a GitHub organization or username
 func ListGitHubRepositories(owner string) ([]Repository, error) {
+	return ListGitHubRepositoriesWithExecutor(owner, &DefaultGithubCommandExecutor{})
+}
+
+// ListGitHubRepositoriesWithExecutor lists repositories using a custom executor (useful for testing)
+func ListGitHubRepositoriesWithExecutor(owner string, executor GithubCommandExecutor) ([]Repository, error) {
 	// Prepare the GitHub CLI command
 	args := []string{"repo", "list"}
 	if owner != "" {
@@ -26,8 +45,7 @@ func ListGitHubRepositories(owner string) ([]Repository, error) {
 	args = append(args, "--limit", fmt.Sprintf("%d", 1000))
 
 	// Execute the GitHub CLI command
-	cmd := exec.Command("gh", args...)
-	output, err := cmd.Output()
+	output, err := executor.Execute(args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute GitHub CLI: %w", err)
 	}
