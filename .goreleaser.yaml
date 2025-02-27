@@ -30,10 +30,12 @@ archives:
     
     formats:
     - tar.gz
+    - binary
     format_overrides:
       - goos: windows
         formats:
         - zip
+        - binary
     files:
       - README.md
       - LICENSE*
