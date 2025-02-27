@@ -1,4 +1,4 @@
-// cmd/github.go
+// cmd/gh-clone.go
 package cmd
 
 import (
@@ -12,34 +12,34 @@ import (
 )
 
 var (
-	githubOwner string
-	rootDirFlag string
+	ghCloneOwner   string
+	ghCloneRootDir string
 )
 
-var githubCmd = &cobra.Command{
-	Use:   "github [owner]",
+var ghCloneCmd = &cobra.Command{
+	Use:   "gh-clone [owner]",
 	Short: "List and clone GitHub repositories",
 	Long: `List repositories from a GitHub organization or username,
 select repositories from a filterable list, and clone the selected repositories.
 
 Examples:
   # List repositories from a GitHub organization
-  gitm github alexdouze
+  gitm gh-clone alexdouze
 
   # List repositories from a GitHub organization with a limit
-  gitm github alexdouze --limit 10
+  gitm gh-clone alexdouze --limit 10
 
   # List repositories from a GitHub organization and clone to a specific directory
-  gitm github alexdouze --root-dir ~/projects`,
+  gitm gh-clone alexdouze --root-dir ~/projects`,
 	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		// Set owner from args if provided
 		if len(args) > 0 {
-			githubOwner = args[0]
+			ghCloneOwner = args[0]
 		}
 
 		// If no owner is provided, use the authenticated user
-		if githubOwner == "" {
+		if ghCloneOwner == "" {
 			fmt.Println("No owner provided. Using authenticated user.")
 		}
 
@@ -52,12 +52,12 @@ Examples:
 
 		// Use specified root directory or default from config
 		targetDir := cfg.RootDirectory
-		if rootDirFlag != "" {
-			targetDir = rootDirFlag
+		if ghCloneRootDir != "" {
+			targetDir = ghCloneRootDir
 		}
 
 		// List repositories using GitHub CLI
-		repos, err := git.ListGitHubRepositories(githubOwner)
+		repos, err := git.ListGitHubRepositories(ghCloneOwner)
 		if err != nil {
 			fmt.Printf("Failed to list repositories: %s\n", err)
 			return
@@ -91,7 +91,7 @@ Examples:
 }
 
 func init() {
-	rootCmd.AddCommand(githubCmd)
-	githubCmd.Flags().StringVar(&githubOwner, "owner", "", "GitHub organization or username")
-	githubCmd.Flags().StringVar(&rootDirFlag, "root-dir", "", "Root directory for cloning repositories")
+	rootCmd.AddCommand(ghCloneCmd)
+	ghCloneCmd.Flags().StringVar(&ghCloneOwner, "owner", "", "GitHub organization or username")
+	ghCloneCmd.Flags().StringVar(&ghCloneRootDir, "root-dir", "", "Root directory for cloning repositories")
 }
