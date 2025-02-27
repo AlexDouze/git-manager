@@ -27,7 +27,6 @@ archives:
       {{- .Version }}_
       {{- .Os }}_
       {{- .Arch }}
-    
     formats:
     - binary
     files:
@@ -58,3 +57,16 @@ release:
   prerelease: auto
   draft: false
   name_template: "v{{ .Version }}"
+
+brews:
+  - name: gitm
+    repository:
+      owner: alexdouze
+      name: homebrew-tap
+    homepage: "https://github.com/alexDouze/git-manager"
+    description: "Git Manager CLI tool"
+    license: "MIT"
+    install: |
+      bin.install "gitm"
+    test: |
+      system "#{bin}/gitm", "version"
