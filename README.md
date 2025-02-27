@@ -12,6 +12,14 @@
 
 ## Installation
 
+### Using Homebrew
+
+You can install `gitm` using Homebrew:
+
+```bash
+brew install alexdouze/tap/gitm
+```
+
 ### From Source
 
 1. Clone the repository:
