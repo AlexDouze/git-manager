@@ -67,6 +67,8 @@ brews:
     homepage: "https://github.com/alexDouze/git-manager"
     directory: Formula
     description: "Git Manager CLI tool"
+    extra_install:
+      generate_completions_from_executable(bin/"gitm", "completions")
     license: "MIT"
     test: |
       system "#{bin}/gitm", "version"
