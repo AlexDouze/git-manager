@@ -63,6 +63,7 @@ brews:
     repository:
       owner: alexdouze
       name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/alexDouze/git-manager"
     description: "Git Manager CLI tool"
     license: "MIT"
