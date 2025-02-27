@@ -65,9 +65,8 @@ brews:
       name: homebrew-tap
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/alexDouze/git-manager"
+    directory: Formula
     description: "Git Manager CLI tool"
     license: "MIT"
-    install: |
-      bin.install "gitm"
     test: |
       system "#{bin}/gitm", "version"
