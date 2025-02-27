@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/alexDouze/gitm/pkg/git"
@@ -35,7 +34,7 @@ func SelectGithubReposRender(repos []git.Repository) ([]git.Repository, error) {
 	// Function to update the displayed list based on current filter
 	updateList := func() {
 		list.Clear()
-		for i, item := range items {
+		for _, item := range items {
 			// Skip items that don't match the filter
 			if filterText != "" && !strings.Contains(strings.ToLower(item.Repo.Name), strings.ToLower(filterText)) {
 				continue
@@ -47,8 +46,8 @@ func SelectGithubReposRender(repos []git.Repository) ([]git.Repository, error) {
 				prefix = "[✓] "
 			}
 
-			// Add the item to the list
-			list.AddItem(prefix+item.Repo.Name, "", rune('a'+i), nil)
+			// Add the item to the list without alphabetical shortcut
+			list.AddItem(prefix+item.Repo.Name, "", 0, nil)
 		}
 	}
 
@@ -74,8 +73,20 @@ func SelectGithubReposRender(repos []git.Repository) ([]git.Repository, error) {
 		currentIndex := list.GetCurrentItem()
 
 		// Handle key presses
-		switch event.Key() {
-		case tcell.KeyRune:
+		switch {
+		case event.Key() == tcell.KeyRune && event.Rune() == 'j':
+			// Move down (vim style)
+			if currentIndex < list.GetItemCount()-1 {
+				list.SetCurrentItem(currentIndex + 1)
+			}
+			return nil
+		case event.Key() == tcell.KeyRune && event.Rune() == 'k':
+			// Move up (vim style)
+			if currentIndex > 0 {
+				list.SetCurrentItem(currentIndex - 1)
+			}
+			return nil
+		case event.Key() == tcell.KeyRune:
 			if event.Rune() == '/' {
 				// Enter filter mode
 				// filterMode = true
@@ -104,7 +115,7 @@ func SelectGithubReposRender(repos []git.Repository) ([]git.Repository, error) {
 				}
 				return nil
 			}
-		case tcell.KeyEnter:
+		case event.Key() == tcell.KeyEnter:
 			// Confirm selection and exit
 			app.Stop()
 			return nil
@@ -122,13 +133,12 @@ func SelectGithubReposRender(repos []git.Repository) ([]git.Repository, error) {
 		panic(err)
 	}
 
-	// Print selected items
-	fmt.Println("Selected items:")
+	var res []git.Repository
 	for _, item := range items {
 		if item.Selected {
-			fmt.Println("- " + item.Repo.Name)
+			res = append(res, item.Repo)
 		}
 	}
 
-	return nil, nil
+	return res, nil
 }
