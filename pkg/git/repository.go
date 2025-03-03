@@ -255,6 +255,13 @@ type BranchUpdateResult struct {
 	Err    error
 }
 
+// PruneResult represents the result of a branch pruning operation
+type PruneResult struct {
+	Repository     *Repository
+	PrunedBranches []string
+	Error          error
+}
+
 // Update updates the repository (fetch and optionally pull), UpdateResult is nil if fetchOnly is true
 func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 	// Fetch from all remotes

@@ -159,6 +159,27 @@ gitm update --all --prune
 gitm update --host github.com --org username --repo repository
 ```
 
+### Pruning Branches
+
+Prune local branches that meet specified criteria (gone remotes or merged):
+
+```bash
+# Show branches that would be pruned in all repositories (dry run)
+gitm prune --all --gone-only
+
+# Prune branches with gone remotes only (actually delete)
+gitm prune --all --gone-only --no-dry-run
+
+# Prune merged branches only
+gitm prune --all --merged-only
+
+# Prune both gone and merged branches
+gitm prune --all --gone-only --merged-only
+
+# Filter by host, organization, or repository name
+gitm prune --host github.com --org username --repo repository --gone-only
+```
+
 ## Project Structure
 
 ```
@@ -166,9 +187,12 @@ gitm/
 ├── cmd/                # Command implementations
 │   ├── clone.go        # Clone command
 │   ├── config.go       # Configuration command
+│   ├── gh-clone.go     # GitHub clone command
+│   ├── prune.go        # Branch pruning command
 │   ├── root.go         # Root command
 │   ├── status.go       # Status command
-│   └── update.go       # Update command
+│   ├── update.go       # Update command
+│   └── version.go      # Version command
 ├── pkg/                # Package code
 │   ├── config/         # Configuration handling
 │   ├── git/            # Git operations
