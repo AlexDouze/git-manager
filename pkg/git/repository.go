@@ -307,6 +307,15 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 		for _, line := range lines {
 			branch := parseBranchInfo(line)
 			if branch != nil && !branch.NoRemoteTracking && !branch.RemoteGone {
+				// Skip branches that are not behind
+				if branch.Behind <= 0 {
+					results[branch.Name] = BranchUpdateResult{
+						Branch: branch,
+						Err:    nil,
+					}
+					continue
+				}
+				
 				var err error
 
 				// Checkout the branch
