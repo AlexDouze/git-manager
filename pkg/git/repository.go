@@ -264,13 +264,19 @@ type PruneResult struct {
 
 // Update updates the repository (fetch and optionally pull)
 func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
+	// Save the current branch to restore it at the end
+	originalBranch, err := r.GetCurrentBranch()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current branch: %w", err)
+	}
+
 	// Fetch from all remotes
 	fetchArgs := []string{"fetch"}
 	if prune {
 		fetchArgs = append(fetchArgs, "--prune")
 	}
 
-	_, err := r.execGitCommand(true, fetchArgs...)
+	_, err = r.execGitCommand(true, fetchArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch: %w", err)
 	}
@@ -285,6 +291,9 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 		return nil, errors.New("cannot update: repository has uncommitted changes")
 	}
 
+	results := make(map[string]BranchUpdateResult)
+	hasError := false
+
 	if !fetchOnly {
 		output, err := r.execGitCommand(false, "branch", "-vv")
 		if err != nil {
@@ -294,49 +303,57 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 		// Parse branch output
 		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 
-		resultChan := make(chan BranchUpdateResult, len(lines))
-
-		var wg sync.WaitGroup
-
+		// Process each branch sequentially (can't do parallel checkouts)
 		for _, line := range lines {
-			wg.Add(1)
-			go func(line string) {
-				defer wg.Done()
-				branch := parseBranchInfo(line)
-				if branch != nil {
-					var err error
-					// Pull changes only for the branch being processed
-					if branch.Current {
-						// Pull changes for current branch
-						_, err = r.execGitCommand(true, "pull", "--rebase")
-					}
+			branch := parseBranchInfo(line)
+			if branch != nil && !branch.NoRemoteTracking && !branch.RemoteGone {
+				var err error
 
-					resultChan <- BranchUpdateResult{
-						Branch: branch,
-						Err:    err,
+				// Checkout the branch
+				if branch.Name != originalBranch {
+					err = r.Checkout(branch.Name)
+					if err != nil {
+						results[branch.Name] = BranchUpdateResult{
+							Branch: branch,
+							Err:    fmt.Errorf("failed to checkout branch: %w", err),
+						}
+						hasError = true
+						continue
 					}
 				}
-			}(line)
-		}
 
-		go func() {
-			wg.Wait()
-			close(resultChan)
-		}()
-		// Collect results
-		results := make(map[string]BranchUpdateResult)
-		hasError := false
-		for result := range resultChan {
-			results[result.Branch.Name] = result
-			if result.Err != nil {
-				hasError = true
+				// Pull changes for the branch
+				_, err = r.execGitCommand(true, "pull", "--rebase")
+
+				results[branch.Name] = BranchUpdateResult{
+					Branch: branch,
+					Err:    err,
+				}
+
+				if err != nil {
+					hasError = true
+				}
 			}
 		}
-		return &UpdateResult{Repository: r, BranchUpdateResults: results, HasErrors: hasError}, nil
+
+		// Restore the original branch
+		if originalBranch != "" {
+			err = r.Checkout(originalBranch)
+			if err != nil {
+				return &UpdateResult{
+					Repository:          r,
+					BranchUpdateResults: results,
+					HasErrors:           true,
+				}, fmt.Errorf("failed to restore original branch %s: %w", originalBranch, err)
+			}
+		}
 	}
 
-	// In fetch-only mode, just return a result with no branch updates
-	return &UpdateResult{Repository: r, BranchUpdateResults: make(map[string]BranchUpdateResult), HasErrors: false}, nil
+	return &UpdateResult{
+		Repository:          r,
+		BranchUpdateResults: results,
+		HasErrors:           hasError,
+	}, nil
 }
 
 // PruneBranches prunes branches based on criteria
