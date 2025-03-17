@@ -3,7 +3,6 @@ package cmd
 
 import (
 	"fmt"
-	"sync"
 
 	"github.com/alexDouze/gitm/pkg/config"
 	"github.com/alexDouze/gitm/pkg/git"
@@ -39,25 +38,22 @@ Can also prune remote-tracking branches that no longer exist on the remote.`,
 			return nil
 		}
 
-		// Create a wait group to wait for all goroutines to complete
-		var wg sync.WaitGroup
-		wg.Add(len(repositories))
-
-		// Process repositories in parallel
+		// Process repositories sequentially
 		for _, repo := range repositories {
-			go func(r *git.Repository) {
-				defer wg.Done()
-
-				// Update repository (fetch remote branches)
-				updateResult, updateErr := r.Update(false, false)
-				if updateErr != nil {
-					fmt.Printf("Warning: failed to update remote branches for %s: %v\n", r.Path, updateErr)
+			// Update repository (fetch and optionally pull)
+			updateResult, updateErr := repo.Update(fetchOnly, prune)
+			if updateErr != nil {
+				fmt.Printf("Warning: failed to update %s: %v\n", repo.Path, updateErr)
+			} else if updateResult != nil {
+				if fetchOnly {
+					fmt.Printf("=== %s/%s/%s ===\n", repo.Host, repo.Organization, repo.Name)
+					fmt.Println("✅ Changes fetched successfully")
+					fmt.Println()
+				} else {
+					tui.UpdateRender(updateResult)
 				}
-				tui.UpdateRender(updateResult)
-
-			}(repo)
+			}
 		}
-		wg.Wait()
 
 		return nil
 	},

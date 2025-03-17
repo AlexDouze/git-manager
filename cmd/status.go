@@ -52,8 +52,8 @@ branch status, and other important information.`,
 			go func(r *git.Repository) {
 				defer wg.Done()
 
-				// Update repository (fetch remote branches)
-				r.Update(true, false)
+				// // Update repository (fetch remote branches)
+				// r.Update(true, false)
 
 				// Get repository status
 				status, statusErr := r.Status()

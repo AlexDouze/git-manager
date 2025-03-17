@@ -262,7 +262,7 @@ type PruneResult struct {
 	Error          error
 }
 
-// Update updates the repository (fetch and optionally pull), UpdateResult is nil if fetchOnly is true
+// Update updates the repository (fetch and optionally pull)
 func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 	// Fetch from all remotes
 	fetchArgs := []string{"fetch"}
@@ -335,7 +335,8 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 		return &UpdateResult{Repository: r, BranchUpdateResults: results, HasErrors: hasError}, nil
 	}
 
-	return nil, nil
+	// In fetch-only mode, just return a result with no branch updates
+	return &UpdateResult{Repository: r, BranchUpdateResults: make(map[string]BranchUpdateResult), HasErrors: false}, nil
 }
 
 // PruneBranches prunes branches based on criteria

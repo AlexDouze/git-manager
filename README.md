@@ -140,8 +140,9 @@ gitm status --path /path/to/repository
 The status command shows:
 - Uncommitted changes
 - Branch information (current branch, remote tracking)
-- Branches that are ahead/behind their remote counterparts
-- Branches with remote gone
+- Branches that are ahead/behind their remote counterparts (with commit count)
+- Branches with remote gone (with branch names)
+- Branches without remote tracking (with branch names)
 - Stash information
 
 ### Updating Repositories
