@@ -483,48 +483,54 @@ func parseBranchInfo(line string) *BranchInfo {
 		line = strings.TrimPrefix(line, "  ")
 	}
 
-	// Parse branch name and tracking info
-	parts := strings.Fields(line)
-	if len(parts) < 2 {
+	// Extract branch name (first word)
+	spaceIndex := strings.Index(line, " ")
+	if spaceIndex == -1 {
 		return nil
 	}
 
-	branch.Name = parts[0]
+	branch.Name = line[:spaceIndex]
+	line = strings.TrimSpace(line[spaceIndex:])
 
-	// Check for tracking information
+	// Look for tracking information between square brackets
 	trackingInfoFound := false
-	for _, part := range parts {
-		if strings.HasPrefix(part, "[") && strings.Contains(part, "]") {
-			trackingInfoFound = true
-			trackInfo := strings.Trim(part, "[]")
+	startIdx := strings.Index(line, "[")
+	endIdx := strings.Index(line, "]")
 
-			if strings.Contains(trackInfo, "gone") {
-				branch.RemoteGone = true
-				continue
-			}
+	if startIdx != -1 && endIdx != -1 && endIdx > startIdx {
+		trackingInfoFound = true
+		trackInfo := line[startIdx+1 : endIdx]
 
+		if strings.Contains(trackInfo, "gone") {
+			branch.RemoteGone = true
+		} else {
 			// Extract remote tracking branch
-			remoteParts := strings.Split(trackInfo, ":")
-			branch.RemoteTracking = remoteParts[0]
+			colonIndex := strings.Index(trackInfo, ":")
+			if colonIndex != -1 {
+				branch.RemoteTracking = strings.TrimSpace(trackInfo[:colonIndex])
 
-			// Check for ahead/behind
-			if len(remoteParts) > 1 {
-				statusParts := strings.Fields(remoteParts[1])
-				for _, status := range statusParts {
-					if strings.HasPrefix(status, "ahead") {
-						fmt.Sscanf(status, "ahead %d", &branch.Ahead)
-					} else if strings.HasPrefix(status, "behind") {
-						fmt.Sscanf(status, "behind %d", &branch.Behind)
-					}
+				// Parse ahead/behind information
+				statusInfo := trackInfo[colonIndex+1:]
+
+				// Check for ahead
+				aheadIdx := strings.Index(statusInfo, "ahead")
+				if aheadIdx != -1 {
+					fmt.Sscanf(statusInfo[aheadIdx:], "ahead %d", &branch.Ahead)
 				}
-			}
 
-			break
+				// Check for behind
+				behindIdx := strings.Index(statusInfo, "behind")
+				if behindIdx != -1 {
+					fmt.Sscanf(statusInfo[behindIdx:], "behind %d", &branch.Behind)
+				}
+			} else {
+				branch.RemoteTracking = strings.TrimSpace(trackInfo)
+			}
 		}
 	}
 
 	// If no tracking info was found
-	if !trackingInfoFound {
+	if !trackingInfoFound && branch.RemoteTracking == "" {
 		branch.NoRemoteTracking = true
 	}
 
