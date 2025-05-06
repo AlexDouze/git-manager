@@ -43,7 +43,7 @@ Can also prune remote-tracking branches that no longer exist on the remote.`,
 			// Update repository (fetch and optionally pull)
 			updateResult, updateErr := repo.Update(fetchOnly, prune)
 			if updateErr != nil {
-				fmt.Printf("Warning: failed to update %s: %v\n", repo.Path, updateErr)
+				tui.UpdateErrorRender(repo, updateErr)
 			} else if updateResult != nil {
 				if fetchOnly {
 					fmt.Printf("=== %s/%s/%s ===\n", repo.Host, repo.Organization, repo.Name)

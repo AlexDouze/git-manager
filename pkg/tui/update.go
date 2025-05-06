@@ -28,3 +28,10 @@ func UpdateRender(status *git.UpdateResult) {
 	}
 	fmt.Println()
 }
+
+// UpdateErrorRender renders an update error through the TUI
+func UpdateErrorRender(repo *git.Repository, err error) {
+	fmt.Printf("=== %s/%s/%s ===\n", repo.Host, repo.Organization, repo.Name)
+	fmt.Printf("❌ Error: %v\n", err)
+	fmt.Println()
+}
