@@ -315,7 +315,7 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 					}
 					continue
 				}
-				
+
 				var err error
 
 				// Checkout the branch
@@ -366,7 +366,9 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 }
 
 // PruneBranches prunes branches based on criteria
-func (r *Repository) PruneBranches(goneOnly, mergedOnly bool, dryRun bool) ([]string, error) {
+// By default, it will prune the current branch if its remote is gone by checking out the default branch first
+// Set noPruneCurrent to true to disable pruning the current branch
+func (r *Repository) PruneBranches(goneOnly, mergedOnly bool, dryRun bool, noPruneCurrent bool) ([]string, error) {
 	var branchesToPrune []string
 
 	// Get branch information
@@ -375,14 +377,47 @@ func (r *Repository) PruneBranches(goneOnly, mergedOnly bool, dryRun bool) ([]st
 		return nil, fmt.Errorf("failed to get repository status: %w", err)
 	}
 
-	// Determine which branches to prune
-	branchesToPrune, err = r.identifyBranchesToPrune(status, goneOnly, mergedOnly)
+	// Determine which branches to prune (by default allow pruning current branch)
+	branchesToPrune, err = r.identifyBranchesToPrune(status, goneOnly, mergedOnly, !noPruneCurrent)
 	if err != nil {
 		return nil, err
 	}
 
 	// Actually delete the branches if not a dry run
 	if !dryRun && len(branchesToPrune) > 0 {
+		// Check if we need to checkout a different branch first
+		if !noPruneCurrent {
+			currentBranch := status.CurrentBranch
+			// Check if current branch is in the list to prune
+			currentBranchToPrune := false
+			for _, branch := range branchesToPrune {
+				if branch == currentBranch {
+					currentBranchToPrune = true
+					break
+				}
+			}
+
+			// If current branch needs to be pruned, checkout default branch first
+			if currentBranchToPrune {
+				defaultBranch, err := r.GetDefaultBranch()
+				if err != nil {
+					return nil, fmt.Errorf("failed to determine default branch: %w", err)
+				}
+
+				// Don't prune the default branch if it's the only branch we have
+				if defaultBranch == currentBranch {
+					return nil, fmt.Errorf("cannot prune current branch '%s' because it is also the default branch", currentBranch)
+				}
+
+				// Checkout the default branch
+				err = r.Checkout(defaultBranch)
+				if err != nil {
+					return nil, fmt.Errorf("failed to checkout default branch '%s' before pruning current branch: %w", defaultBranch, err)
+				}
+			}
+		}
+
+		// Now delete the branches
 		for _, branch := range branchesToPrune {
 			_, err := r.execGitCommand(false, "branch", "-D", branch)
 			if err != nil {
@@ -413,7 +448,7 @@ func (r *Repository) GetDefaultBranch() (string, error) {
 }
 
 // identifyBranchesToPrune determines which branches should be pruned based on criteria
-func (r *Repository) identifyBranchesToPrune(status *RepositoryStatus, goneOnly, mergedOnly bool) ([]string, error) {
+func (r *Repository) identifyBranchesToPrune(status *RepositoryStatus, goneOnly, mergedOnly bool, pruneCurrent bool) ([]string, error) {
 	var branchesToPrune []string
 
 	// Get the default branch
@@ -423,8 +458,13 @@ func (r *Repository) identifyBranchesToPrune(status *RepositoryStatus, goneOnly,
 	}
 
 	for _, branch := range status.Branches {
-		// Skip current branch and default branch
-		if branch.Current || branch.Name == defaultBranch {
+		// Always skip default branch
+		if branch.Name == defaultBranch {
+			continue
+		}
+
+		// Skip current branch if pruneCurrent is false
+		if branch.Current && !pruneCurrent {
 			continue
 		}
 
