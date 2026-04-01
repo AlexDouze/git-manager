@@ -141,88 +141,6 @@ func (r *TestRepository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 	return nil, nil
 }
 
-// PruneBranches overrides the original PruneBranches method to bypass filesystem checks
-func (r *TestRepository) PruneBranches(goneOnly, mergedOnly bool, dryRun bool, noPruneCurrent bool) ([]string, error) {
-	// Skip the filesystem check that would normally happen in Repository.PruneBranches()
-	// and only perform it if we explicitly want to test that case
-	if !r.pathExists {
-		return nil, fmt.Errorf("repository path does not exist: %s", r.Path)
-	}
-
-	// For test purposes, we'll directly return the expected branches based on the test case
-	// This is a simplified approach for testing
-	if goneOnly {
-		// If we're testing gone branches, return old-feature
-		branchesToPrune := []string{"old-feature"}
-		
-		// By default (when noPruneCurrent is false) we simulate the current branch having a gone remote
-		if !noPruneCurrent {
-			branchesToPrune = append(branchesToPrune, "current-feature-gone")
-		}
-
-		// Actually delete the branches if not a dry run
-		if !dryRun {
-			// If we need to prune the current branch, checkout default branch first
-			if !noPruneCurrent {
-				for _, branch := range branchesToPrune {
-					if branch == "current-feature-gone" {
-						// Simulate checking out the default branch first
-						_, err := r.execGitCommand(false, "checkout", "main")
-						if err != nil {
-							return branchesToPrune, fmt.Errorf("failed to checkout default branch: %w", err)
-						}
-						break
-					}
-				}
-			}
-			
-			for _, branch := range branchesToPrune {
-				_, err := r.execGitCommand(false, "branch", "-D", branch)
-				if err != nil {
-					return branchesToPrune, fmt.Errorf("failed to delete branch %s: %w", branch, err)
-				}
-			}
-		}
-
-		return branchesToPrune, nil
-	} else if mergedOnly {
-		// If we're testing merged branches, return merged-feature
-		branchesToPrune := []string{"merged-feature"}
-		
-		// By default (when noPruneCurrent is false) we simulate the current branch being merged
-		if !noPruneCurrent {
-			branchesToPrune = append(branchesToPrune, "current-feature-merged")
-		}
-
-		// Actually delete the branches if not a dry run
-		if !dryRun {
-			// If we need to prune the current branch, checkout default branch first
-			if !noPruneCurrent {
-				for _, branch := range branchesToPrune {
-					if branch == "current-feature-merged" {
-						// Simulate checking out the default branch first
-						_, err := r.execGitCommand(false, "checkout", "main")
-						if err != nil {
-							return branchesToPrune, fmt.Errorf("failed to checkout default branch: %w", err)
-						}
-						break
-					}
-				}
-			}
-			
-			for _, branch := range branchesToPrune {
-				_, err := r.execGitCommand(false, "branch", "-D", branch)
-				if err != nil {
-					return branchesToPrune, fmt.Errorf("failed to delete branch %s: %w", branch, err)
-				}
-			}
-		}
-
-		return branchesToPrune, nil
-	}
-
-	return []string{}, nil
-}
 
 // Execute calls the mock's ExecuteFunc if defined, or returns a default response
 func (m *MockGitCommandExecutor) Execute(repoPath string, stdout bool, args ...string) ([]byte, error) {
@@ -715,61 +633,45 @@ func TestUpdate(t *testing.T) {
 func TestPruneBranches(t *testing.T) {
 	// Create a repository for testing
 	repo := NewTestRepository()
-	repo.Path = "/mock/path"
+	repo.Path = "/tmp" // must be a real path so os.Stat passes in Repository.Status()
 
 	// Test prune branches with gone remotes
 	t.Run("Prune branches with gone remotes", func(t *testing.T) {
 		mockExecutor := &MockGitCommandExecutor{
 			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
-				// Handle status command
 				if len(args) > 0 && args[0] == "status" {
 					return []byte(""), nil
 				}
-				// Handle branch command
 				if len(args) > 0 && args[0] == "branch" {
 					if len(args) > 1 && args[1] == "-vv" {
 						return []byte("* main\n  feature [origin/feature]\n  old-feature [origin/old-feature: gone]"), nil
 					}
-					if len(args) > 1 && args[1] == "--merged" {
-						return []byte("  feature\n  old-feature"), nil
-					}
 					if len(args) > 1 && args[1] == "-D" {
-						// Handle both current-feature-gone and old-feature branches
-						if args[2] != "old-feature" && args[2] != "current-feature-gone" {
-							t.Errorf("Expected to delete old-feature or current-feature-gone branch, got: %v", args[2])
+						if args[2] != "old-feature" {
+							t.Errorf("Expected to delete old-feature, got: %v", args[2])
 						}
 						return []byte("Deleted branch " + args[2]), nil
 					}
 				}
-				// Handle stash list command
 				if len(args) > 1 && args[0] == "stash" && args[1] == "list" {
 					return []byte(""), nil
 				}
-				// Handle show-ref command for default branch detection
 				if len(args) > 0 && args[0] == "show-ref" {
-					if args[2] == "refs/heads/main" {
-						return []byte("ref: refs/heads/main"), nil
-					}
 					return nil, errors.New("ref not found")
 				}
-				// Handle rev-parse command for current branch
 				if len(args) > 0 && args[0] == "rev-parse" {
 					return []byte("main"), nil
-				}
-				// Handle checkout command for switching to default branch
-				if len(args) > 0 && args[0] == "checkout" {
-					return []byte("Switched to branch 'main'"), nil
 				}
 				return nil, errors.New("unexpected command")
 			},
 		}
 
-		repo.SetGitCommandExecutor(mockExecutor)
-		branches, err := repo.PruneBranches(true, false, false, false)
+		repo.Repository.SetGitCommandExecutor(mockExecutor)
+		branches, err := repo.Repository.PruneBranches(true, false, false, false)
 		if err != nil {
 			t.Errorf("PruneBranches() error = %v, want nil", err)
 		}
-		if len(branches) != 2 || branches[0] != "old-feature" || branches[1] != "current-feature-gone" {
+		if len(branches) != 1 || branches[0] != "old-feature" {
 			t.Errorf("PruneBranches() branches = %v, want [old-feature]", branches)
 		}
 	})
@@ -778,11 +680,9 @@ func TestPruneBranches(t *testing.T) {
 	t.Run("Prune merged branches", func(t *testing.T) {
 		mockExecutor := &MockGitCommandExecutor{
 			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
-				// Handle status command
 				if len(args) > 0 && args[0] == "status" {
 					return []byte(""), nil
 				}
-				// Handle branch command
 				if len(args) > 0 && args[0] == "branch" {
 					if len(args) > 1 && args[1] == "-vv" {
 						return []byte("* main\n  feature [origin/feature]\n  merged-feature [origin/merged-feature]"), nil
@@ -791,43 +691,32 @@ func TestPruneBranches(t *testing.T) {
 						return []byte("  feature\n  merged-feature"), nil
 					}
 					if len(args) > 1 && args[1] == "-D" {
-						// Handle both merged-feature and current-feature-merged branches
-						if args[2] != "merged-feature" && args[2] != "current-feature-merged" {
-							t.Errorf("Expected to delete merged-feature or current-feature-merged branch, got: %v", args[2])
+						if args[2] != "merged-feature" && args[2] != "feature" {
+							t.Errorf("Expected to delete feature or merged-feature, got: %v", args[2])
 						}
 						return []byte("Deleted branch " + args[2]), nil
 					}
 				}
-				// Handle stash list command
 				if len(args) > 1 && args[0] == "stash" && args[1] == "list" {
 					return []byte(""), nil
 				}
-				// Handle show-ref command for default branch detection
 				if len(args) > 0 && args[0] == "show-ref" {
-					if args[2] == "refs/heads/main" {
-						return []byte("ref: refs/heads/main"), nil
-					}
 					return nil, errors.New("ref not found")
 				}
-				// Handle rev-parse command for current branch
 				if len(args) > 0 && args[0] == "rev-parse" {
 					return []byte("main"), nil
-				}
-				// Handle checkout command for switching to default branch
-				if len(args) > 0 && args[0] == "checkout" {
-					return []byte("Switched to branch 'main'"), nil
 				}
 				return nil, errors.New("unexpected command")
 			},
 		}
 
-		repo.SetGitCommandExecutor(mockExecutor)
-		branches, err := repo.PruneBranches(false, true, false, false)
+		repo.Repository.SetGitCommandExecutor(mockExecutor)
+		branches, err := repo.Repository.PruneBranches(false, true, false, false)
 		if err != nil {
 			t.Errorf("PruneBranches() error = %v, want nil", err)
 		}
-		if len(branches) != 2 || branches[0] != "merged-feature" || branches[1] != "current-feature-merged" {
-			t.Errorf("PruneBranches() branches = %v, want [merged-feature]", branches)
+		if len(branches) != 2 {
+			t.Errorf("PruneBranches() branches = %v, want [feature merged-feature]", branches)
 		}
 	})
 
@@ -835,35 +724,24 @@ func TestPruneBranches(t *testing.T) {
 	t.Run("Dry run", func(t *testing.T) {
 		mockExecutor := &MockGitCommandExecutor{
 			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
-				// Handle status command
 				if len(args) > 0 && args[0] == "status" {
 					return []byte(""), nil
 				}
-				// Handle branch command
 				if len(args) > 0 && args[0] == "branch" {
 					if len(args) > 1 && args[1] == "-vv" {
 						return []byte("* main\n  feature [origin/feature]\n  old-feature [origin/old-feature: gone]"), nil
-					}
-					if len(args) > 1 && args[1] == "--merged" {
-						return []byte("  feature\n  old-feature"), nil
 					}
 					if len(args) > 1 && args[1] == "-D" {
 						t.Error("Branch deletion should not be called in dry run mode")
 						return nil, errors.New("should not be called")
 					}
 				}
-				// Handle stash list command
 				if len(args) > 1 && args[0] == "stash" && args[1] == "list" {
 					return []byte(""), nil
 				}
-				// Handle show-ref command for default branch detection
 				if len(args) > 0 && args[0] == "show-ref" {
-					if args[2] == "refs/heads/main" {
-						return []byte("ref: refs/heads/main"), nil
-					}
 					return nil, errors.New("ref not found")
 				}
-				// Handle rev-parse command for current branch
 				if len(args) > 0 && args[0] == "rev-parse" {
 					return []byte("main"), nil
 				}
@@ -871,12 +749,12 @@ func TestPruneBranches(t *testing.T) {
 			},
 		}
 
-		repo.SetGitCommandExecutor(mockExecutor)
-		branches, err := repo.PruneBranches(true, false, true, false)
+		repo.Repository.SetGitCommandExecutor(mockExecutor)
+		branches, err := repo.Repository.PruneBranches(true, false, true, false)
 		if err != nil {
 			t.Errorf("PruneBranches() error = %v, want nil", err)
 		}
-		if len(branches) != 2 || branches[0] != "old-feature" || branches[1] != "current-feature-gone" {
+		if len(branches) != 1 || branches[0] != "old-feature" {
 			t.Errorf("PruneBranches() branches = %v, want [old-feature]", branches)
 		}
 	})
@@ -885,7 +763,6 @@ func TestPruneBranches(t *testing.T) {
 	t.Run("Error getting repository status", func(t *testing.T) {
 		mockExecutor := &MockGitCommandExecutor{
 			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
-				// Simulate error in status command
 				if len(args) > 0 && args[0] == "status" {
 					return nil, errors.New("status failed")
 				}
@@ -893,8 +770,8 @@ func TestPruneBranches(t *testing.T) {
 			},
 		}
 
-		repo.SetGitCommandExecutor(mockExecutor)
-		_, err := repo.PruneBranches(true, false, false, false)
+		repo.Repository.SetGitCommandExecutor(mockExecutor)
+		_, err := repo.Repository.PruneBranches(true, false, false, false)
 		if err == nil {
 			t.Error("PruneBranches() error = nil, want error")
 		}
@@ -904,35 +781,23 @@ func TestPruneBranches(t *testing.T) {
 	t.Run("Error deleting branch", func(t *testing.T) {
 		mockExecutor := &MockGitCommandExecutor{
 			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
-				// Handle status command
 				if len(args) > 0 && args[0] == "status" {
 					return []byte(""), nil
 				}
-				// Handle branch command
 				if len(args) > 0 && args[0] == "branch" {
 					if len(args) > 1 && args[1] == "-vv" {
 						return []byte("* main\n  feature [origin/feature]\n  old-feature [origin/old-feature: gone]"), nil
 					}
-					if len(args) > 1 && args[1] == "--merged" {
-						return []byte("  feature\n  old-feature"), nil
-					}
 					if len(args) > 1 && args[1] == "-D" {
-						// Simulate error deleting branch
 						return nil, errors.New("failed to delete branch")
 					}
 				}
-				// Handle stash list command
 				if len(args) > 1 && args[0] == "stash" && args[1] == "list" {
 					return []byte(""), nil
 				}
-				// Handle show-ref command for default branch detection
 				if len(args) > 0 && args[0] == "show-ref" {
-					if args[2] == "refs/heads/main" {
-						return []byte("ref: refs/heads/main"), nil
-					}
 					return nil, errors.New("ref not found")
 				}
-				// Handle rev-parse command for current branch
 				if len(args) > 0 && args[0] == "rev-parse" {
 					return []byte("main"), nil
 				}
@@ -940,8 +805,8 @@ func TestPruneBranches(t *testing.T) {
 			},
 		}
 
-		repo.SetGitCommandExecutor(mockExecutor)
-		_, err := repo.PruneBranches(true, false, false, false)
+		repo.Repository.SetGitCommandExecutor(mockExecutor)
+		_, err := repo.Repository.PruneBranches(true, false, false, false)
 		if err == nil {
 			t.Error("PruneBranches() error = nil, want error")
 		}

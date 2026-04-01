@@ -33,14 +33,14 @@ var pruneCmd = &cobra.Command{
 
 You can specify to prune only branches with gone remotes, only merged branches, or both.
 By default, this command operates in dry-run mode, which shows what would be deleted.
-Use the --no-dry-run flag to actually delete the branches.
+Use --dry-run=false to actually delete the branches.
 
 By default, the current branch will be pruned if eligible (it will checkout the default branch first).
 Use the --no-prune-current flag to disable pruning the current branch.
 
 Examples:
-  # Show branches that would be pruned in all repositories
-  gitm prune --all
+  # Show branches that would be pruned in all repositories (dry run)
+  gitm prune --all --gone-only --merged-only
 
   # Prune branches with gone remotes only (dry run)
   gitm prune --all --gone-only
@@ -49,10 +49,10 @@ Examples:
   gitm prune --all --merged-only
 
   # Actually prune branches (no dry run)
-  gitm prune --all --no-dry-run
+  gitm prune --all --gone-only --dry-run=false
 
   # Prune branches except the current branch
-  gitm prune --all --gone-only --no-prune-current --no-dry-run
+  gitm prune --all --gone-only --no-prune-current --dry-run=false
 
   # Limit pruning to specific host/organization/repository
   gitm prune --host github.com --org username --repo repository`,
@@ -147,8 +147,6 @@ func init() {
 	// Add prune-specific flags
 	pruneCmd.Flags().BoolVar(&goneOnly, "gone-only", false, "Prune only branches with gone remotes")
 	pruneCmd.Flags().BoolVar(&mergedOnly, "merged-only", false, "Prune only branches that have been merged")
-	pruneCmd.Flags().BoolVar(&dryRun, "dry-run", true, "Show branches that would be pruned without actually pruning them")
-	// Note: no-dry-run will set dry-run to false when used
-	pruneCmd.Flags().BoolVar(&dryRun, "no-dry-run", false, "Actually prune branches (overrides --dry-run)")
+	pruneCmd.Flags().BoolVar(&dryRun, "dry-run", true, "Show branches that would be pruned without actually pruning them (use --dry-run=false to actually prune)")
 	pruneCmd.Flags().BoolVar(&noPruneCurrent, "no-prune-current", false, "Disable pruning the current branch (by default, current branch will be pruned if eligible)")
 }

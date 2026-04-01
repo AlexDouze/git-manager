@@ -457,6 +457,21 @@ func (r *Repository) identifyBranchesToPrune(status *RepositoryStatus, goneOnly,
 		return nil, fmt.Errorf("failed to determine default branch: %w", err)
 	}
 
+	// Build merged branch set once (avoid calling git per branch)
+	mergedBranchSet := make(map[string]bool)
+	if mergedOnly {
+		output, err := r.execGitCommand(false, "branch", "--merged", defaultBranch)
+		if err == nil {
+			for _, mb := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+				mb = strings.TrimSpace(mb)
+				mb = strings.TrimPrefix(mb, "* ")
+				if mb != "" {
+					mergedBranchSet[mb] = true
+				}
+			}
+		}
+	}
+
 	for _, branch := range status.Branches {
 		// Always skip default branch
 		if branch.Name == defaultBranch {
@@ -476,24 +491,8 @@ func (r *Repository) identifyBranchesToPrune(status *RepositoryStatus, goneOnly,
 		}
 
 		// Check if branch is merged
-		if mergedOnly {
-			// Use the already determined default branch
-			// Check if branch is merged into the default branch
-			output, err := r.execGitCommand(false, "branch", "--merged", defaultBranch)
-			if err == nil {
-				// Check if branch name is in the merged branches output
-				mergedBranches := strings.Split(strings.TrimSpace(string(output)), "\n")
-				for _, mb := range mergedBranches {
-					// Remove leading spaces and asterisk for current branch
-					mb = strings.TrimSpace(mb)
-					mb = strings.TrimPrefix(mb, "* ")
-
-					if mb == branch.Name {
-						shouldPrune = true
-						break
-					}
-				}
-			}
+		if mergedOnly && mergedBranchSet[branch.Name] {
+			shouldPrune = true
 		}
 
 		if shouldPrune {
