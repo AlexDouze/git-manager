@@ -3,6 +3,7 @@ package cmd
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/alexDouze/gitm/pkg/config"
@@ -12,12 +13,10 @@ import (
 )
 
 var (
-	hostFilter         string
-	organizationFilter string
-	repositoryFilter   string
-	pathFilter         string
-	displayAll         bool
-	olderThan          string
+	statusFilters FilterFlags
+	displayAll    bool
+	noFetch       bool
+	olderThan     string
 )
 
 var statusCmd = &cobra.Command{
@@ -33,7 +32,7 @@ branch status, and other important information.`,
 		}
 
 		// Find repositories based on filters
-		repositories, err := git.FindRepositories(cfg.RootDirectory, hostFilter, organizationFilter, repositoryFilter, pathFilter)
+		repositories, err := git.FindRepositories(cfg.RootDirectory, statusFilters.Host, statusFilters.Org, statusFilters.Repo, statusFilters.Path)
 		if err != nil {
 			return fmt.Errorf("failed to find repositories: %w", err)
 		}
@@ -55,44 +54,76 @@ branch status, and other important information.`,
 
 		// Process repositories in parallel, collecting results
 		type repoStatus struct {
-			status *git.RepositoryStatus
-			warn   string
+			status    *git.RepositoryStatus
+			warn      string
+			fetchWarn string
+			sortKey   string
 		}
 		results := make([]repoStatus, 0, len(repositories))
 		var mu sync.Mutex
 
+		prog := tui.NewProgress("Scanning repositories", len(repositories))
+
+		// Limit concurrent SSH signing operations to avoid overwhelming the SSH agent
+		// (especially hardware keys like YubiKey that handle signing sequentially).
+		fetchSem := make(chan struct{}, 4)
+
 		for _, repo := range repositories {
 			go func(r *git.Repository) {
 				defer wg.Done()
+				defer prog.Increment()
 
-				// Fetch remote branches; warn but continue on failure
-				if _, fetchErr := r.Update(true, false); fetchErr != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to fetch %s: %v\n", r.Path, fetchErr)
+				sortKey := fmt.Sprintf("%s/%s/%s", r.Host, r.Organization, r.Name)
+
+				var fetchWarn string
+				if !noFetch {
+					fetchSem <- struct{}{}
+					_, fetchErr := r.Update(true, false)
+					<-fetchSem
+					if fetchErr != nil {
+						fetchWarn = fmt.Sprintf("Warning: failed to fetch %s: %v", r.Path, fetchErr)
+					}
 				}
 
 				// Get repository status
 				status, statusErr := r.Status()
 				if statusErr != nil {
 					mu.Lock()
-					results = append(results, repoStatus{warn: fmt.Sprintf("Warning: failed to get status for %s: %v", r.Path, statusErr)})
+					results = append(results, repoStatus{
+						warn:      fmt.Sprintf("Warning: failed to get status for %s: %v", r.Path, statusErr),
+						fetchWarn: fetchWarn,
+						sortKey:   sortKey,
+					})
 					mu.Unlock()
 					return
 				}
 
 				// Mark stale branches
 				if markErr := r.MarkStaleBranches(status, threshold); markErr != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to check stale branches for %s: %v\n", r.Path, markErr)
+					fetchWarn += fmt.Sprintf("\nWarning: failed to check stale branches for %s: %v", r.Path, markErr)
 				}
 
 				mu.Lock()
-				results = append(results, repoStatus{status: status})
+				results = append(results, repoStatus{status: status, fetchWarn: fetchWarn, sortKey: sortKey})
 				mu.Unlock()
 			}(repo)
 		}
 
 		wg.Wait()
 
-		// Render sequentially after all goroutines finish
+		// Sort results deterministically by host/org/name
+		sort.Slice(results, func(i, j int) bool {
+			return results[i].sortKey < results[j].sortKey
+		})
+
+		// Print fetch/scan warnings after progress clears, before the status output
+		for _, r := range results {
+			if r.fetchWarn != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), r.fetchWarn)
+			}
+		}
+
+		// Render status results
 		for _, r := range results {
 			if r.warn != "" {
 				fmt.Fprintln(cmd.ErrOrStderr(), r.warn)
@@ -109,12 +140,17 @@ branch status, and other important information.`,
 func init() {
 	rootCmd.AddCommand(statusCmd)
 
-	// Add filter flags
-	statusCmd.Flags().StringVar(&hostFilter, "host", "", "Filter repositories by host")
-	statusCmd.Flags().StringVar(&organizationFilter, "org", "", "Filter repositories by organization/username")
-	statusCmd.Flags().StringVar(&repositoryFilter, "repo", "", "Filter repositories by name")
-	statusCmd.Flags().StringVar(&pathFilter, "path", "", "Filter repositories by path")
-	statusCmd.Flags().BoolVar(&displayAll, "display-all", false, "Display all repositories")
-	statusCmd.Flags().StringVar(&olderThan, "older-than", "1m", "Threshold for stale branch detection (e.g., 30d, 4w, 1m)")
+	// Add filter flags (shared)
+	statusFilters.Register(statusCmd)
 
+	// Display flags
+	statusCmd.Flags().BoolVar(&displayAll, "all", false, "Display all repositories including clean ones")
+	statusCmd.Flags().BoolVar(&displayAll, "display-all", false, "Display all repositories")
+	if err := statusCmd.Flags().MarkHidden("display-all"); err != nil {
+		panic(err)
+	}
+
+	// Status-specific flags
+	statusCmd.Flags().BoolVar(&noFetch, "no-fetch", false, "Skip fetching from remotes before checking status")
+	statusCmd.Flags().StringVar(&olderThan, "older-than", "30d", "Threshold for stale branch detection (e.g., 30d, 4w, 3m where m=months)")
 }

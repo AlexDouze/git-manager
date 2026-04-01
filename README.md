@@ -6,8 +6,11 @@
 
 - **Structured Repository Organization**: Automatically organizes repositories in a structured directory hierarchy (`<root-directory>/<host>/<organization>/<repository>`).
 - **Multi-Repository Management**: Manage multiple git repositories with a single command.
-- **Repository Status**: Check the status of repositories, showing uncommitted changes, branch status, and other important information.
+- **Repository Status**: Check the status of repositories, showing uncommitted changes, branch status, stale branches, and stash counts.
 - **Repository Updates**: Update repositories by fetching and optionally pulling the latest changes.
+- **Branch Pruning**: Prune stale branches across all managed repositories with a safe dry-run default.
+- **Colored Output**: Color-coded output for quick scanning. Disable with `--no-color` or by setting `NO_COLOR=1`.
+- **Progress Indicators**: Real-time progress feedback during multi-repository operations.
 - **Configuration Management**: Easily configure and customize the behavior of the tool.
 
 ## Installation
@@ -121,8 +124,14 @@ gitm clone https://github.com/username/repository.git --root-dir /path/to/direct
 Check the status of repositories:
 
 ```bash
-# Check all repositories
+# Check all repositories (only shows repos with issues by default)
+gitm status
+
+# Show all repositories, including clean ones
 gitm status --all
+
+# Skip fetching from remotes (faster, offline-friendly)
+gitm status --no-fetch
 
 # Filter by host
 gitm status --host github.com
@@ -135,6 +144,9 @@ gitm status --repo repository
 
 # Filter by path
 gitm status --path /path/to/repository
+
+# Customize the stale branch threshold (default: 30d)
+gitm status --older-than 14d
 ```
 
 The status command shows:
@@ -143,18 +155,22 @@ The status command shows:
 - Branches that are ahead/behind their remote counterparts (with commit count)
 - Branches with remote gone (with branch names)
 - Branches without remote tracking (with branch names)
-- Stash information
+- Stale branches (last commit older than threshold)
+- Stash count
 
 ### Updating Repositories
 
 Update repositories by fetching and optionally pulling the latest changes:
 
 ```bash
-# Update all repositories (fetch only)
-gitm update --all
+# Update all repositories (fetch + pull)
+gitm update
+
+# Fetch only, without pulling
+gitm update --fetch-only
 
 # Update with pruning remote-tracking branches
-gitm update --all --prune
+gitm update --prune
 
 # Filter by host, organization, or repository name
 gitm update --host github.com --org username --repo repository
@@ -162,20 +178,24 @@ gitm update --host github.com --org username --repo repository
 
 ### Pruning Branches
 
-Prune local branches that meet specified criteria (gone remotes or merged):
+Prune local branches that meet specified criteria (gone remotes or merged).
+By default, the command runs in **dry-run mode** — it shows what would be deleted without actually deleting anything. Use `--execute` to actually delete branches.
 
 ```bash
-# Show branches that would be pruned in all repositories (dry run)
+# Preview branches that would be pruned (dry run, default)
 gitm prune --all --gone-only
 
-# Prune branches with gone remotes only (actually delete)
-gitm prune --all --gone-only --no-dry-run
+# Actually prune branches with gone remotes
+gitm prune --all --gone-only --execute
 
 # Prune merged branches only
-gitm prune --all --merged-only
+gitm prune --all --merged-only --execute
 
 # Prune both gone and merged branches
-gitm prune --all --gone-only --merged-only
+gitm prune --all --gone-only --merged-only --execute
+
+# Keep the current branch even if eligible for pruning
+gitm prune --all --gone-only --execute --keep-current
 
 # Filter by host, organization, or repository name
 gitm prune --host github.com --org username --repo repository --gone-only
@@ -188,6 +208,7 @@ gitm/
 ├── cmd/                # Command implementations
 │   ├── clone.go        # Clone command
 │   ├── config.go       # Configuration command
+│   ├── flags.go        # Shared filter flags
 │   ├── gh-clone.go     # GitHub clone command
 │   ├── prune.go        # Branch pruning command
 │   ├── root.go         # Root command
@@ -198,6 +219,8 @@ gitm/
 │   ├── config/         # Configuration handling
 │   ├── git/            # Git operations
 │   └── tui/            # Terminal UI components
+│       ├── progress.go # Progress indicator
+│       └── style.go    # Color styles
 ├── main.go             # Entry point
 └── Makefile            # Build instructions
 ```

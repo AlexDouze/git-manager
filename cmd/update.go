@@ -11,12 +11,9 @@ import (
 )
 
 var (
-	updateHostFilter         string
-	updateOrganizationFilter string
-	updateRepositoryFilter   string
-	updatePathFilter         string
-	fetchOnly                bool
-	prune                    bool
+	updateFilters FilterFlags
+	fetchOnly     bool
+	prune         bool
 )
 
 var updateCmd = &cobra.Command{
@@ -25,14 +22,12 @@ var updateCmd = &cobra.Command{
 	Long: `Update git repositories by fetching and optionally pulling the latest changes.
 Can also prune remote-tracking branches that no longer exist on the remote.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Load configuration
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			return fmt.Errorf("failed to load configuration: %w", err)
 		}
 
-		// Find repositories based on filters
-		repositories, err := git.FindRepositories(cfg.RootDirectory, updateHostFilter, updateOrganizationFilter, updateRepositoryFilter, updatePathFilter)
+		repositories, err := git.FindRepositories(cfg.RootDirectory, updateFilters.Host, updateFilters.Org, updateFilters.Repo, updateFilters.Path)
 		if err != nil {
 			return fmt.Errorf("failed to find repositories: %w", err)
 		}
@@ -42,19 +37,29 @@ Can also prune remote-tracking branches that no longer exist on the remote.`,
 			return nil
 		}
 
-		// Process repositories sequentially
+		type result struct {
+			repo         *git.Repository
+			updateResult *git.UpdateResult
+			err          error
+		}
+
+		results := make([]result, 0, len(repositories))
+		prog := tui.NewProgress("Updating repositories", len(repositories))
+
 		for _, repo := range repositories {
-			// Update repository (fetch and optionally pull)
-			updateResult, updateErr := repo.Update(fetchOnly, prune)
-			if updateErr != nil {
-				tui.UpdateErrorRender(repo, updateErr)
-			} else if updateResult != nil {
+			ur, err := repo.Update(fetchOnly, prune)
+			prog.Increment()
+			results = append(results, result{repo: repo, updateResult: ur, err: err})
+		}
+
+		for _, r := range results {
+			if r.err != nil {
+				tui.UpdateErrorRender(r.repo, r.err)
+			} else if r.updateResult != nil {
 				if fetchOnly {
-					fmt.Printf("=== %s/%s/%s ===\n", repo.Host, repo.Organization, repo.Name)
-					fmt.Println("✅ Changes fetched successfully")
-					fmt.Println()
+					tui.UpdateFetchOnlyRender(r.repo)
 				} else {
-					tui.UpdateRender(updateResult)
+					tui.UpdateRender(r.updateResult)
 				}
 			}
 		}
@@ -66,13 +71,8 @@ Can also prune remote-tracking branches that no longer exist on the remote.`,
 func init() {
 	rootCmd.AddCommand(updateCmd)
 
-	// Add filter flags
-	updateCmd.Flags().StringVar(&updateHostFilter, "host", "", "Filter repositories by host")
-	updateCmd.Flags().StringVar(&updateOrganizationFilter, "org", "", "Filter repositories by organization/username")
-	updateCmd.Flags().StringVar(&updateRepositoryFilter, "repo", "", "Filter repositories by name")
-	updateCmd.Flags().StringVar(&updatePathFilter, "path", "", "Filter repositories by path")
+	updateFilters.Register(updateCmd)
 
-	// Add update-specific flags
 	updateCmd.Flags().BoolVar(&fetchOnly, "fetch-only", false, "Only fetch changes without pulling")
 	updateCmd.Flags().BoolVar(&prune, "prune", false, "Prune remote-tracking branches")
 }

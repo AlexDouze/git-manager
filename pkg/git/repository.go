@@ -20,8 +20,8 @@ type GitCommandExecutor interface {
 type DefaultGitCommandExecutor struct{}
 
 // Execute executes a git command with the given arguments.
-// If stdout is true, the command runs without capturing output (output is discarded).
-// If stdout is false, stdout is captured and returned; stderr is discarded.
+// If stdout is true, the command streams output directly to the terminal (used for interactive commands like clone).
+// If stdout is false, stdout and stderr are both captured; on error the output is included in the ExitError.
 func (e *DefaultGitCommandExecutor) Execute(repoPath string, stdout bool, args ...string) ([]byte, error) {
 	// Insert the repository path argument if provided
 	if repoPath != "" {
@@ -43,7 +43,11 @@ func (e *DefaultGitCommandExecutor) Execute(repoPath string, stdout bool, args .
 		return nil, err
 	}
 
-	return cmd.Output()
+	out, err := cmd.CombinedOutput()
+	if err != nil && len(out) > 0 {
+		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return out, err
 }
 
 // Repository represents a Git repository with its metadata
@@ -268,25 +272,24 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 		fetchArgs = append(fetchArgs, "--prune")
 	}
 
-	_, err = r.execGitCommand(true, fetchArgs...)
+	_, err = r.execGitCommand(false, fetchArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch: %w", err)
-	}
-
-	// Check if there are uncommitted changes
-	status, err := r.Status()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get repository status: %w", err)
-	}
-
-	if status.HasUncommittedChanges {
-		return nil, errors.New("cannot update: repository has uncommitted changes")
 	}
 
 	results := make(map[string]BranchUpdateResult)
 	hasError := false
 
 	if !fetchOnly {
+		// Check for uncommitted changes before pulling
+		status, err := r.Status()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get repository status: %w", err)
+		}
+		if status.HasUncommittedChanges {
+			return nil, errors.New("cannot update: repository has uncommitted changes")
+		}
+
 		output, err := r.execGitCommand(false, "branch", "-vv")
 		if err != nil {
 			return nil, err
@@ -324,7 +327,7 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 				}
 
 				// Pull changes for the branch
-				_, err = r.execGitCommand(true, "pull", "--rebase")
+				_, err = r.execGitCommand(false, "pull", "--rebase")
 
 				results[branch.Name] = BranchUpdateResult{
 					Branch: branch,
@@ -694,7 +697,7 @@ func (r *Repository) GetCurrentBranch() (string, error) {
 // Checkout checks out a branch
 func (r *Repository) Checkout(branchOrArgs ...string) error {
 	args := append([]string{"checkout"}, branchOrArgs...)
-	_, err := r.execGitCommand(true, args...)
+	_, err := r.execGitCommand(false, args...)
 	if err != nil {
 		return fmt.Errorf("failed to checkout: %w", err)
 	}

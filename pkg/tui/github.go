@@ -21,7 +21,7 @@ func SelectGithubReposRender(repos []git.Repository) ([]git.Repository, error) {
 
 	app := tview.NewApplication()
 	list := tview.NewList()
-	list.SetBorder(true).SetTitle("Select Items (Space to select, / to filter, Enter to confirm)")
+	list.SetBorder(true).SetTitle("Select Repositories to Clone (Space: select, /: filter, Enter: confirm, Esc: cancel)")
 	// Create a text field for filtering
 	filterInput := tview.NewInputField().
 		SetLabel("Filter: ").
@@ -70,6 +70,13 @@ func SelectGithubReposRender(repos []git.Repository) ([]git.Repository, error) {
 
 		// Handle key presses
 		switch {
+		case event.Key() == tcell.KeyEsc:
+			// Cancel: clear all selections and exit
+			for i := range items {
+				items[i].Selected = false
+			}
+			app.Stop()
+			return nil
 		case event.Key() == tcell.KeyRune && event.Rune() == 'j':
 			// Move down (vim style)
 			if currentIndex < list.GetItemCount()-1 {

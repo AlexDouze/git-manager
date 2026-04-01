@@ -9,15 +9,15 @@ import (
 )
 
 func StatusRender(status *git.RepositoryStatus) {
-	// Render the repository status
-	fmt.Printf("=== %s/%s/%s ===\n", status.Repository.Host, status.Repository.Organization, status.Repository.Name)
+	// Render the repository header
+	HeaderStyle.Printf("=== %s/%s/%s ===\n", status.Repository.Host, status.Repository.Organization, status.Repository.Name)
 
 	// Check for branches behind remote
 	if status.HasBranchesBehindRemote {
 		branchesBehind := getBranchesWithIssue(status.Branches, func(b git.BranchInfo) bool {
 			return b.Behind > 0
 		}, true)
-		fmt.Printf("❌ Branches behind remote: %s\n", branchesBehind)
+		ErrorStyle.Printf("❌ Branches behind remote: %s\n", branchesBehind)
 	}
 
 	// Check for branches with remote gone
@@ -25,7 +25,7 @@ func StatusRender(status *git.RepositoryStatus) {
 		branchesGone := getBranchesWithIssue(status.Branches, func(b git.BranchInfo) bool {
 			return b.RemoteGone
 		}, false)
-		fmt.Printf("❌ Branches with remote gone: %s\n", branchesGone)
+		ErrorStyle.Printf("❌ Branches with remote gone: %s\n", branchesGone)
 	}
 
 	// Check for branches without remote
@@ -33,22 +33,27 @@ func StatusRender(status *git.RepositoryStatus) {
 		branchesNoRemote := getBranchesWithIssue(status.Branches, func(b git.BranchInfo) bool {
 			return b.NoRemoteTracking
 		}, false)
-		fmt.Printf("❌ Branches without remote: %s\n", branchesNoRemote)
+		WarnStyle.Printf("⚠️  Branches without remote: %s\n", branchesNoRemote)
 	}
 
 	// Check for stale branches
 	if status.HasStaleBranches {
 		staleBranches := getStaleBranchesDisplay(status)
-		fmt.Printf("❌ Stale branches: %s\n", staleBranches)
+		WarnStyle.Printf("⚠️  Stale branches: %s\n", staleBranches)
 	}
 
 	// Check for uncommitted changes
 	if status.HasUncommittedChanges {
-		fmt.Println("❌ Uncommitted changes")
+		ErrorStyle.Println("❌ Uncommitted changes")
+	}
+
+	// Show stash count as informational
+	if status.StashCount > 0 {
+		InfoStyle.Printf("📦 %d stash(es)\n", status.StashCount)
 	}
 
 	if !status.HasIssues() {
-		fmt.Println("✅ Repository is clean")
+		SuccessStyle.Println("✅ Repository is clean")
 	}
 	fmt.Println()
 }

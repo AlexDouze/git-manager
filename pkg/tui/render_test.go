@@ -10,16 +10,28 @@ import (
 	"time"
 
 	"github.com/alexDouze/gitm/pkg/git"
+	"github.com/fatih/color"
 )
 
-// captureStdout redirects os.Stdout for the duration of f and returns what was written.
+// captureStdout redirects os.Stdout and color.Output for the duration of f and
+// returns what was written. Colors are disabled for predictable text matching.
 func captureStdout(f func()) string {
-	orig := os.Stdout
+	origStdout := os.Stdout
+	origColorOutput := color.Output
+	origNoColor := color.NoColor
+
 	r, w, _ := os.Pipe()
 	os.Stdout = w
+	color.Output = w
+	color.NoColor = true
+
 	f()
+
 	w.Close()
-	os.Stdout = orig
+	os.Stdout = origStdout
+	color.Output = origColorOutput
+	color.NoColor = origNoColor
+
 	var buf bytes.Buffer
 	io.Copy(&buf, r)
 	return buf.String()
@@ -135,8 +147,8 @@ func TestStatusRender(t *testing.T) {
 
 	t.Run("branches behind remote", func(t *testing.T) {
 		status := &git.RepositoryStatus{
-			Repository:               repo,
-			HasBranchesBehindRemote:  true,
+			Repository:              repo,
+			HasBranchesBehindRemote: true,
 			Branches: []git.BranchInfo{
 				{Name: "main", Behind: 3, Current: true},
 			},
@@ -176,8 +188,19 @@ func TestStatusRender(t *testing.T) {
 			},
 		}
 		out := captureStdout(func() { StatusRender(status) })
-		if !strings.Contains(out, "❌ Branches without remote") {
+		if !strings.Contains(out, "Branches without remote") {
 			t.Errorf("StatusRender() output = %q, want no-remote message", out)
+		}
+	})
+
+	t.Run("stash count displayed", func(t *testing.T) {
+		status := &git.RepositoryStatus{
+			Repository: repo,
+			StashCount: 3,
+		}
+		out := captureStdout(func() { StatusRender(status) })
+		if !strings.Contains(out, "3 stash") {
+			t.Errorf("StatusRender() output = %q, want stash count", out)
 		}
 	})
 }
@@ -193,7 +216,7 @@ func TestRenderPruneResults(t *testing.T) {
 			},
 		}
 		out := captureStdout(func() { RenderPruneResults(results, false) })
-		if !strings.Contains(out, "✅ Pruned 2 branches") {
+		if !strings.Contains(out, "Pruned 2 branch") {
 			t.Errorf("RenderPruneResults() output = %q, want pruned message", out)
 		}
 		if !strings.Contains(out, "old-feature") {
@@ -245,14 +268,14 @@ func TestUpdateRender(t *testing.T) {
 		}
 	})
 
-	t.Run("fetch only (no branch results)", func(t *testing.T) {
+	t.Run("no branch results shows up to date", func(t *testing.T) {
 		status := &git.UpdateResult{
 			Repository:          repo,
 			BranchUpdateResults: map[string]git.BranchUpdateResult{},
 		}
 		out := captureStdout(func() { UpdateRender(status) })
-		if !strings.Contains(out, "Fetched changes only") {
-			t.Errorf("UpdateRender() output = %q, want fetch-only message", out)
+		if !strings.Contains(out, "All branches are up to date") {
+			t.Errorf("UpdateRender() output = %q, want up-to-date message", out)
 		}
 	})
 
