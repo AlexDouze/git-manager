@@ -3,9 +3,9 @@ package git
 import (
 	"errors"
 	"fmt"
-	"strings"
-	"sync"
+	"os/exec"
 	"testing"
+	"time"
 )
 
 // MockGitCommandExecutor is a mock implementation of GitCommandExecutor for testing
@@ -57,90 +57,6 @@ func (r *TestRepository) Status() (*RepositoryStatus, error) {
 
 	return status, nil
 }
-
-// Update overrides the original Update method to bypass filesystem checks
-func (r *TestRepository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
-	// Skip the filesystem check that would normally happen in Repository.Update()
-	// and only perform it if we explicitly want to test that case
-	if !r.pathExists {
-		return nil, fmt.Errorf("repository path does not exist: %s", r.Path)
-	}
-
-	// Call the original Update method but use our Status method that bypasses filesystem checks
-	// First, fetch from all remotes
-	fetchArgs := []string{"fetch"}
-	if prune {
-		fetchArgs = append(fetchArgs, "--prune")
-	}
-
-	_, err := r.execGitCommand(true, fetchArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch: %w", err)
-	}
-
-	// Check if there are uncommitted changes
-	status, err := r.Status()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get repository status: %w", err)
-	}
-
-	if status.HasUncommittedChanges {
-		return nil, errors.New("cannot update: repository has uncommitted changes")
-	}
-
-	if !fetchOnly {
-		output, err := r.execGitCommand(false, "branch", "-vv")
-		if err != nil {
-			return nil, err
-		}
-
-		// Parse branch output
-		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-
-		resultChan := make(chan BranchUpdateResult, len(lines))
-
-		var wg sync.WaitGroup
-
-		for _, line := range lines {
-			wg.Add(1)
-			go func(line string) {
-				defer wg.Done()
-				branch := parseBranchInfo(line)
-				if branch != nil {
-					var err error
-					// Pull changes only for the branch being processed
-					if branch.Current {
-						// Pull changes for current branch
-						_, err = r.execGitCommand(true, "pull", "--rebase")
-					}
-
-					resultChan <- BranchUpdateResult{
-						Branch: branch,
-						Err:    err,
-					}
-				}
-			}(line)
-		}
-
-		go func() {
-			wg.Wait()
-			close(resultChan)
-		}()
-		// Collect results
-		results := make(map[string]BranchUpdateResult)
-		hasError := false
-		for result := range resultChan {
-			results[result.Branch.Name] = result
-			if result.Err != nil {
-				hasError = true
-			}
-		}
-		return &UpdateResult{Repository: r.Repository, BranchUpdateResults: results, HasErrors: hasError}, nil
-	}
-
-	return nil, nil
-}
-
 
 // Execute calls the mock's ExecuteFunc if defined, or returns a default response
 func (m *MockGitCommandExecutor) Execute(repoPath string, stdout bool, args ...string) ([]byte, error) {
@@ -412,108 +328,103 @@ func TestClone(t *testing.T) {
 }
 
 func TestUpdate(t *testing.T) {
-	// Create a repository for testing
-	repo := NewTestRepository()
-	repo.Path = "/mock/path"
+	// All subtests use /tmp so os.Stat passes in Repository.Status().
+	// Mocks handle all git commands needed by the real Update() method.
+	newRepo := func() *TestRepository {
+		r := NewTestRepository()
+		r.Path = "/tmp"
+		return r
+	}
 
-	// Test fetch only
-	t.Run("Fetch only", func(t *testing.T) {
-		mockExecutor := &MockGitCommandExecutor{
+	// stdMock builds a mock executor with configurable responses per command.
+	stdMock := func(
+		revParse string,
+		fetchErr error,
+		statusOutput string,
+		branchOutput string,
+		pullErr error,
+	) *MockGitCommandExecutor {
+		return &MockGitCommandExecutor{
 			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
-				// First call should be fetch
-				if len(args) > 0 && args[0] == "fetch" {
+				if len(args) == 0 {
+					return nil, fmt.Errorf("unexpected empty command")
+				}
+				switch args[0] {
+				case "rev-parse":
+					return []byte(revParse), nil
+				case "fetch":
+					return []byte(""), fetchErr
+				case "status":
+					return []byte(statusOutput), nil
+				case "branch":
+					if len(args) > 1 && args[1] == "-vv" {
+						return []byte(branchOutput), nil
+					}
+				case "stash":
+					if len(args) > 1 && args[1] == "list" {
+						return []byte(""), nil
+					}
+				case "pull":
+					return []byte(""), pullErr
+				case "checkout":
 					return []byte(""), nil
 				}
-				// Second call should be status
-				if len(args) > 0 && args[0] == "status" {
-					return []byte(""), nil
-				}
-				// Third call should be branch
-				if len(args) > 0 && args[0] == "branch" {
-					return []byte("* main"), nil
-				}
-				// Fourth call should be stash list
-				if len(args) > 1 && args[0] == "stash" && args[1] == "list" {
-					return []byte(""), nil
-				}
-				return nil, errors.New("unexpected command")
+				return nil, fmt.Errorf("unexpected command: %v", args)
 			},
 		}
+	}
 
-		repo.SetGitCommandExecutor(mockExecutor)
+	t.Run("Fetch only", func(t *testing.T) {
+		repo := newRepo()
+		repo.SetGitCommandExecutor(stdMock("main", nil, "", "* main [origin/main]", nil))
 		result, err := repo.Update(true, false)
 		if err != nil {
 			t.Errorf("Update() error = %v, want nil", err)
 		}
-		if result != nil {
-			t.Errorf("Update() result = %v, want nil", result)
+		if result == nil {
+			t.Error("Update() result = nil, want non-nil")
+		}
+		if result != nil && len(result.BranchUpdateResults) != 0 {
+			t.Errorf("Update() BranchUpdateResults = %v, want empty (fetch-only)", result.BranchUpdateResults)
 		}
 	})
 
-	// Test fetch with prune
 	t.Run("Fetch with prune", func(t *testing.T) {
-		mockExecutor := &MockGitCommandExecutor{
+		repo := newRepo()
+		var seenPrune, seenAll bool
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
 			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
-				// Verify fetch command includes --prune
-				if len(args) > 0 && args[0] == "fetch" {
-					if len(args) < 2 || args[1] != "--prune" {
-						t.Errorf("Expected fetch --prune command, got: %v", args)
+				if args[0] == "fetch" {
+					for _, a := range args {
+						if a == "--prune" {
+							seenPrune = true
+						}
+						if a == "--all" {
+							seenAll = true
+						}
 					}
 					return []byte(""), nil
 				}
-				// Handle other commands
-				if len(args) > 0 && args[0] == "status" {
-					return []byte(""), nil
-				}
-				if len(args) > 0 && args[0] == "branch" {
-					return []byte("* main"), nil
-				}
-				if len(args) > 1 && args[0] == "stash" && args[1] == "list" {
-					return []byte(""), nil
-				}
-				return nil, errors.New("unexpected command")
+				return stdMock("main", nil, "", "* main [origin/main]", nil).ExecuteFunc(repoPath, stdout, args...)
 			},
-		}
-
-		repo.SetGitCommandExecutor(mockExecutor)
+		})
 		_, err := repo.Update(true, true)
 		if err != nil {
 			t.Errorf("Update() error = %v, want nil", err)
 		}
+		if !seenPrune {
+			t.Error("expected fetch to include --prune")
+		}
+		if !seenAll {
+			t.Error("expected fetch to include --all")
+		}
 	})
 
-	// Test fetch and pull
-	t.Run("Fetch and pull", func(t *testing.T) {
-		mockExecutor := &MockGitCommandExecutor{
-			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
-				// Handle fetch command
-				if len(args) > 0 && args[0] == "fetch" {
-					return []byte(""), nil
-				}
-				// Handle status command
-				if len(args) > 0 && args[0] == "status" {
-					return []byte(""), nil
-				}
-				// Handle branch command
-				if len(args) > 0 && args[0] == "branch" {
-					return []byte("* main\n  feature"), nil
-				}
-				// Handle pull command
-				if len(args) > 0 && args[0] == "pull" {
-					if len(args) < 2 || args[1] != "--rebase" {
-						t.Errorf("Expected pull --rebase command, got: %v", args)
-					}
-					return []byte("Already up to date."), nil
-				}
-				// Handle stash list command
-				if len(args) > 1 && args[0] == "stash" && args[1] == "list" {
-					return []byte(""), nil
-				}
-				return nil, errors.New("unexpected command")
-			},
-		}
-
-		repo.SetGitCommandExecutor(mockExecutor)
+	t.Run("Fetch and pull branch behind", func(t *testing.T) {
+		repo := newRepo()
+		// feature is behind remote — pull should be called
+		repo.SetGitCommandExecutor(stdMock("main", nil, "",
+			"* main [origin/main]\n  feature [origin/feature: behind 2]", nil))
 		result, err := repo.Update(false, false)
 		if err != nil {
 			t.Errorf("Update() error = %v, want nil", err)
@@ -521,111 +432,41 @@ func TestUpdate(t *testing.T) {
 		if result == nil {
 			t.Error("Update() result = nil, want non-nil")
 		} else if result.HasErrors {
-			t.Error("Update() result.HasErrors = true, want false")
+			t.Errorf("Update() result.HasErrors = true, want false")
 		}
 	})
 
-	// Test update with uncommitted changes
 	t.Run("Update with uncommitted changes", func(t *testing.T) {
-		mockExecutor := &MockGitCommandExecutor{
-			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
-				// Handle fetch command
-				if len(args) > 0 && args[0] == "fetch" {
-					return []byte(""), nil
-				}
-				// Handle status command - return uncommitted changes
-				if len(args) > 0 && args[0] == "status" {
-					return []byte("M  README.md"), nil
-				}
-				// Handle branch command
-				if len(args) > 0 && args[0] == "branch" {
-					return []byte("* main"), nil
-				}
-				// Handle stash list command
-				if len(args) > 1 && args[0] == "stash" && args[1] == "list" {
-					return []byte(""), nil
-				}
-				return nil, errors.New("unexpected command")
-			},
-		}
-
-		repo.SetGitCommandExecutor(mockExecutor)
+		repo := newRepo()
+		repo.SetGitCommandExecutor(stdMock("main", nil, "M  README.md", "* main [origin/main]", nil))
 		_, err := repo.Update(false, false)
 		if err == nil {
 			t.Error("Update() error = nil, want error about uncommitted changes")
 		}
 	})
 
-	// Test fetch error
 	t.Run("Fetch error", func(t *testing.T) {
-		mockExecutor := &MockGitCommandExecutor{
-			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
-				// Simulate fetch error
-				if len(args) > 0 && args[0] == "fetch" {
-					return nil, errors.New("fetch failed")
-				}
-				return []byte(""), nil
-			},
-		}
-
-		repo.SetGitCommandExecutor(mockExecutor)
+		repo := newRepo()
+		repo.SetGitCommandExecutor(stdMock("main", errors.New("fetch failed"), "", "* main [origin/main]", nil))
 		_, err := repo.Update(true, false)
 		if err == nil {
 			t.Error("Update() error = nil, want fetch error")
 		}
 	})
 
-	// Test pull error
 	t.Run("Pull error", func(t *testing.T) {
-		// Create a new test repository
-		repo := NewTestRepository()
-		repo.Path = "/mock/path"
-
-		// Create a mock executor that simulates a pull error
-		mockExecutor := &MockGitCommandExecutor{
-			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
-				// Handle fetch command
-				if len(args) > 0 && args[0] == "fetch" {
-					return []byte(""), nil
-				}
-				// Handle status command
-				if len(args) > 0 && args[0] == "status" {
-					return []byte(""), nil
-				}
-				// Handle branch command
-				if len(args) > 0 && args[0] == "branch" {
-					return []byte("* main"), nil
-				}
-				// Simulate pull error
-				if len(args) > 0 && args[0] == "pull" {
-					return nil, errors.New("pull failed")
-				}
-				// Handle stash list command
-				if len(args) > 1 && args[0] == "stash" && args[1] == "list" {
-					return []byte(""), nil
-				}
-				return []byte(""), nil
-			},
+		repo := newRepo()
+		// main is current and behind — pull is invoked and fails
+		repo.SetGitCommandExecutor(stdMock("main", nil, "",
+			"* main [origin/main: behind 1]", errors.New("pull failed")))
+		result, err := repo.Update(false, false)
+		if err != nil {
+			t.Errorf("Update() unexpected top-level error = %v", err)
 		}
-
-		repo.SetGitCommandExecutor(mockExecutor)
-
-		// Create a result with HasErrors set to true for testing
-		results := make(map[string]BranchUpdateResult)
-		results["main"] = BranchUpdateResult{
-			Branch: &BranchInfo{Name: "main", Current: true},
-			Err:    errors.New("pull failed"),
-		}
-
-		result := &UpdateResult{
-			Repository:          repo.Repository,
-			BranchUpdateResults: results,
-			HasErrors:           true,
-		}
-
-		// Verify the result has errors
-		if !result.HasErrors {
-			t.Error("UpdateResult.HasErrors = false, want true")
+		if result == nil {
+			t.Error("Update() result = nil, want non-nil")
+		} else if !result.HasErrors {
+			t.Error("Update() result.HasErrors = false, want true (pull failed)")
 		}
 	})
 }
@@ -657,6 +498,9 @@ func TestPruneBranches(t *testing.T) {
 					return []byte(""), nil
 				}
 				if len(args) > 0 && args[0] == "show-ref" {
+					if args[len(args)-1] == "refs/heads/main" {
+						return nil, nil // main branch exists
+					}
 					return nil, errors.New("ref not found")
 				}
 				if len(args) > 0 && args[0] == "rev-parse" {
@@ -701,6 +545,9 @@ func TestPruneBranches(t *testing.T) {
 					return []byte(""), nil
 				}
 				if len(args) > 0 && args[0] == "show-ref" {
+					if args[len(args)-1] == "refs/heads/main" {
+						return nil, nil // main branch exists
+					}
 					return nil, errors.New("ref not found")
 				}
 				if len(args) > 0 && args[0] == "rev-parse" {
@@ -740,6 +587,9 @@ func TestPruneBranches(t *testing.T) {
 					return []byte(""), nil
 				}
 				if len(args) > 0 && args[0] == "show-ref" {
+					if args[len(args)-1] == "refs/heads/main" {
+						return nil, nil // main branch exists
+					}
 					return nil, errors.New("ref not found")
 				}
 				if len(args) > 0 && args[0] == "rev-parse" {
@@ -796,6 +646,9 @@ func TestPruneBranches(t *testing.T) {
 					return []byte(""), nil
 				}
 				if len(args) > 0 && args[0] == "show-ref" {
+					if args[len(args)-1] == "refs/heads/main" {
+						return nil, nil // main branch exists
+					}
 					return nil, errors.New("ref not found")
 				}
 				if len(args) > 0 && args[0] == "rev-parse" {
@@ -811,4 +664,367 @@ func TestPruneBranches(t *testing.T) {
 			t.Error("PruneBranches() error = nil, want error")
 		}
 	})
+}
+
+// exitError produces an *exec.ExitError with the given exit code.
+func exitError(code int) error {
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("exit %d", code))
+	err := cmd.Run()
+	return err
+}
+
+func TestFilterRepositories(t *testing.T) {
+	repos := []*Repository{
+		{Host: "github.com", Organization: "acme", Name: "api"},
+		{Host: "github.com", Organization: "acme", Name: "frontend"},
+		{Host: "gitlab.com", Organization: "acme", Name: "infra"},
+		{Host: "github.com", Organization: "other", Name: "tool"},
+	}
+
+	tests := []struct {
+		name  string
+		host  string
+		org   string
+		repo  string
+		count int
+	}{
+		{"no filters returns all", "", "", "", 4},
+		{"filter by host", "github.com", "", "", 3},
+		{"filter by org", "", "acme", "", 3},
+		{"filter by repo name", "", "", "api", 1},
+		{"host + org", "github.com", "acme", "", 2},
+		{"all three filters", "github.com", "acme", "api", 1},
+		{"no match", "bitbucket.org", "", "", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FilterRepositories(repos, tt.host, tt.org, tt.repo)
+			if len(got) != tt.count {
+				t.Errorf("FilterRepositories() len = %d, want %d", len(got), tt.count)
+			}
+		})
+	}
+}
+
+func TestGetCurrentBranch(t *testing.T) {
+	repo := NewTestRepository()
+	repo.Path = "/mock/path"
+
+	t.Run("success", func(t *testing.T) {
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+				return []byte("feature\n"), nil
+			},
+		})
+		branch, err := repo.Repository.GetCurrentBranch()
+		if err != nil {
+			t.Fatalf("GetCurrentBranch() error = %v, want nil", err)
+		}
+		if branch != "feature" {
+			t.Errorf("GetCurrentBranch() = %q, want %q", branch, "feature")
+		}
+	})
+
+	t.Run("error", func(t *testing.T) {
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+				return nil, errors.New("not a git repo")
+			},
+		})
+		_, err := repo.Repository.GetCurrentBranch()
+		if err == nil {
+			t.Error("GetCurrentBranch() error = nil, want error")
+		}
+	})
+}
+
+func TestCheckout(t *testing.T) {
+	repo := NewTestRepository()
+	repo.Path = "/mock/path"
+
+	t.Run("success", func(t *testing.T) {
+		var gotArgs []string
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+				gotArgs = args
+				return nil, nil
+			},
+		})
+		if err := repo.Repository.Checkout("main"); err != nil {
+			t.Fatalf("Checkout() error = %v, want nil", err)
+		}
+		if len(gotArgs) < 2 || gotArgs[0] != "checkout" || gotArgs[1] != "main" {
+			t.Errorf("Checkout() args = %v, want [checkout main]", gotArgs)
+		}
+	})
+
+	t.Run("error", func(t *testing.T) {
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+				return nil, errors.New("branch not found")
+			},
+		})
+		if err := repo.Repository.Checkout("nonexistent"); err == nil {
+			t.Error("Checkout() error = nil, want error")
+		}
+	})
+}
+
+func TestGetDefaultBranch(t *testing.T) {
+	repo := NewTestRepository()
+	repo.Path = "/mock/path"
+
+	t.Run("main exists", func(t *testing.T) {
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+				if args[0] == "show-ref" && args[len(args)-1] == "refs/heads/main" {
+					return nil, nil // main exists
+				}
+				return nil, errors.New("unexpected")
+			},
+		})
+		branch, err := repo.Repository.GetDefaultBranch()
+		if err != nil {
+			t.Fatalf("GetDefaultBranch() error = %v, want nil", err)
+		}
+		if branch != "main" {
+			t.Errorf("GetDefaultBranch() = %q, want %q", branch, "main")
+		}
+	})
+
+	t.Run("master fallback", func(t *testing.T) {
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+				if args[0] == "show-ref" {
+					if args[len(args)-1] == "refs/heads/main" {
+						return nil, exitError(1) // main absent
+					}
+					if args[len(args)-1] == "refs/heads/master" {
+						return nil, nil // master exists
+					}
+				}
+				return nil, errors.New("unexpected")
+			},
+		})
+		branch, err := repo.Repository.GetDefaultBranch()
+		if err != nil {
+			t.Fatalf("GetDefaultBranch() error = %v, want nil", err)
+		}
+		if branch != "master" {
+			t.Errorf("GetDefaultBranch() = %q, want %q", branch, "master")
+		}
+	})
+
+	t.Run("fallback to current branch", func(t *testing.T) {
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+				if args[0] == "show-ref" {
+					return nil, exitError(1) // neither main nor master
+				}
+				if args[0] == "rev-parse" {
+					return []byte("develop\n"), nil
+				}
+				return nil, errors.New("unexpected")
+			},
+		})
+		branch, err := repo.Repository.GetDefaultBranch()
+		if err != nil {
+			t.Fatalf("GetDefaultBranch() error = %v, want nil", err)
+		}
+		if branch != "develop" {
+			t.Errorf("GetDefaultBranch() = %q, want %q", branch, "develop")
+		}
+	})
+
+	t.Run("real error on main check", func(t *testing.T) {
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+				return nil, errors.New("network error")
+			},
+		})
+		_, err := repo.Repository.GetDefaultBranch()
+		if err == nil {
+			t.Error("GetDefaultBranch() error = nil, want error")
+		}
+	})
+
+	t.Run("real error on master check", func(t *testing.T) {
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+				if args[0] == "show-ref" && args[len(args)-1] == "refs/heads/main" {
+					return nil, exitError(1)
+				}
+				return nil, errors.New("disk error")
+			},
+		})
+		_, err := repo.Repository.GetDefaultBranch()
+		if err == nil {
+			t.Error("GetDefaultBranch() error = nil, want error")
+		}
+	})
+}
+
+func TestMarkStaleBranches(t *testing.T) {
+	repo := NewTestRepository()
+	repo.Path = "/mock/path"
+
+	now := time.Now()
+	old := now.Add(-60 * 24 * time.Hour)
+	threshold := 30 * 24 * time.Hour
+
+	t.Run("marks old branch stale, skips default branch", func(t *testing.T) {
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+				if args[0] == "for-each-ref" {
+					oldDate := old.Format("2006-01-02 15:04:05 -0700")
+					return []byte("main " + oldDate + "\nfeature " + oldDate), nil
+				}
+				if args[0] == "show-ref" && args[len(args)-1] == "refs/heads/main" {
+					return nil, nil
+				}
+				if args[0] == "rev-parse" && args[1] == "--abbrev-ref" {
+					return []byte(""), nil
+				}
+				return nil, errors.New("unexpected: " + args[0])
+			},
+		})
+
+		status := &RepositoryStatus{
+			Branches: []BranchInfo{
+				{Name: "main"},
+				{Name: "feature"},
+			},
+		}
+
+		if err := repo.Repository.MarkStaleBranches(status, threshold); err != nil {
+			t.Fatalf("MarkStaleBranches() error = %v", err)
+		}
+
+		if status.HasStaleBranches == false {
+			t.Error("HasStaleBranches = false, want true")
+		}
+		// main is the default branch, should not be marked stale even if old
+		for _, b := range status.Branches {
+			if b.Name == "main" && b.LastCommitDate.IsZero() == false {
+				// main got a date but should NOT count as stale (skipped as default)
+				// the function skips default branch
+			}
+			if b.Name == "feature" && b.LastCommitDate.IsZero() {
+				t.Error("feature should have a commit date")
+			}
+		}
+	})
+
+	t.Run("for-each-ref error propagates", func(t *testing.T) {
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+				return nil, errors.New("git error")
+			},
+		})
+		status := &RepositoryStatus{}
+		if err := repo.Repository.MarkStaleBranches(status, threshold); err == nil {
+			t.Error("MarkStaleBranches() error = nil, want error")
+		}
+	})
+}
+
+func TestParseBranchInfo(t *testing.T) {
+	tests := []struct {
+		name    string
+		line    string
+		want    *BranchInfo
+	}{
+		{
+			name: "current branch with tracking",
+			line: "* main [origin/main]",
+			want: &BranchInfo{Name: "main", Current: true, RemoteTracking: "origin/main"},
+		},
+		{
+			name: "non-current branch",
+			line: "  feature [origin/feature]",
+			want: &BranchInfo{Name: "feature", Current: false, RemoteTracking: "origin/feature"},
+		},
+		{
+			name: "branch behind remote",
+			line: "  develop [origin/develop: behind 3]",
+			want: &BranchInfo{Name: "develop", RemoteTracking: "origin/develop", Behind: 3},
+		},
+		{
+			name: "branch ahead of remote",
+			line: "  feature [origin/feature: ahead 2]",
+			want: &BranchInfo{Name: "feature", RemoteTracking: "origin/feature", Ahead: 2},
+		},
+		{
+			name: "branch ahead and behind",
+			line: "  topic [origin/topic: ahead 1, behind 2]",
+			want: &BranchInfo{Name: "topic", RemoteTracking: "origin/topic", Ahead: 1, Behind: 2},
+		},
+		{
+			name: "branch with remote gone",
+			line: "  old-feature [origin/old-feature: gone]",
+			want: &BranchInfo{Name: "old-feature", RemoteGone: true},
+		},
+		{
+			name: "current branch with remote gone",
+			line: "* old-main [origin/old-main: gone]",
+			want: &BranchInfo{Name: "old-main", Current: true, RemoteGone: true},
+		},
+		{
+			name: "branch without remote tracking",
+			line: "  local-only abc1234 Local branch",
+			want: &BranchInfo{Name: "local-only", NoRemoteTracking: true},
+		},
+		{
+			name: "current branch without remote tracking",
+			line: "* local-main abc1234 Local main",
+			want: &BranchInfo{Name: "local-main", Current: true, NoRemoteTracking: true},
+		},
+		{
+			name: "empty line returns nil",
+			line: "",
+			want: nil,
+		},
+		{
+			name: "whitespace only returns nil",
+			line: "   ",
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseBranchInfo(tt.line)
+			if tt.want == nil {
+				if got != nil {
+					t.Errorf("parseBranchInfo(%q) = %+v, want nil", tt.line, got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("parseBranchInfo(%q) = nil, want %+v", tt.line, tt.want)
+			}
+			if got.Name != tt.want.Name {
+				t.Errorf("Name = %q, want %q", got.Name, tt.want.Name)
+			}
+			if got.Current != tt.want.Current {
+				t.Errorf("Current = %v, want %v", got.Current, tt.want.Current)
+			}
+			if got.RemoteTracking != tt.want.RemoteTracking {
+				t.Errorf("RemoteTracking = %q, want %q", got.RemoteTracking, tt.want.RemoteTracking)
+			}
+			if got.RemoteGone != tt.want.RemoteGone {
+				t.Errorf("RemoteGone = %v, want %v", got.RemoteGone, tt.want.RemoteGone)
+			}
+			if got.NoRemoteTracking != tt.want.NoRemoteTracking {
+				t.Errorf("NoRemoteTracking = %v, want %v", got.NoRemoteTracking, tt.want.NoRemoteTracking)
+			}
+			if got.Ahead != tt.want.Ahead {
+				t.Errorf("Ahead = %d, want %d", got.Ahead, tt.want.Ahead)
+			}
+			if got.Behind != tt.want.Behind {
+				t.Errorf("Behind = %d, want %d", got.Behind, tt.want.Behind)
+			}
+		})
+	}
 }

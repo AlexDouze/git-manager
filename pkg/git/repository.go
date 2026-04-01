@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -20,8 +19,9 @@ type GitCommandExecutor interface {
 // DefaultGitCommandExecutor is the default implementation of GitCommandExecutor
 type DefaultGitCommandExecutor struct{}
 
-// Execute executes a git command with the given arguments
-// If stdout is true, command output is connected to os.Stdout and os.Stderr
+// Execute executes a git command with the given arguments.
+// If stdout is true, the command runs without capturing output (output is discarded).
+// If stdout is false, stdout is captured and returned; stderr is discarded.
 func (e *DefaultGitCommandExecutor) Execute(repoPath string, stdout bool, args ...string) ([]byte, error) {
 	// Insert the repository path argument if provided
 	if repoPath != "" {
@@ -37,6 +37,8 @@ func (e *DefaultGitCommandExecutor) Execute(repoPath string, stdout bool, args .
 	cmd := exec.Command("git", args...)
 
 	if stdout {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 		err := cmd.Run()
 		return nil, err
 	}
@@ -132,6 +134,8 @@ func (r *Repository) Clone(rootDir, url string, options []string) error {
 	// Check if repository already exists
 	if _, err := os.Stat(r.Path); err == nil {
 		return fmt.Errorf("repository already exists at %s", r.Path)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("failed to check repository path: %w", err)
 	}
 
 	// Prepare git clone command
@@ -193,41 +197,28 @@ func (r *Repository) getBranchInformation(status *RepositoryStatus) error {
 		return err
 	}
 
-	// Parse branch output
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	var wg sync.WaitGroup
-	var mu sync.Mutex
+	// Parse branch output sequentially for deterministic ordering
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		branch := parseBranchInfo(line)
+		if branch == nil {
+			continue
+		}
+		status.Branches = append(status.Branches, *branch)
 
-	for _, line := range lines {
-		wg.Add(1)
-		go func(line string) {
-			defer wg.Done()
-			branch := parseBranchInfo(line)
-			if branch != nil {
-				mu.Lock()
-				defer mu.Unlock()
-				status.Branches = append(status.Branches, *branch)
-
-				if branch.Current {
-					status.CurrentBranch = branch.Name
-				}
-
-				if branch.RemoteGone {
-					status.HasBranchesWithRemoteGone = true
-				}
-
-				if branch.NoRemoteTracking {
-					status.HasBranchesWithoutRemote = true
-				}
-
-				if branch.Behind > 0 {
-					status.HasBranchesBehindRemote = true
-				}
-			}
-		}(line)
+		if branch.Current {
+			status.CurrentBranch = branch.Name
+		}
+		if branch.RemoteGone {
+			status.HasBranchesWithRemoteGone = true
+		}
+		if branch.NoRemoteTracking {
+			status.HasBranchesWithoutRemote = true
+		}
+		if branch.Behind > 0 {
+			status.HasBranchesBehindRemote = true
+		}
 	}
 
-	wg.Wait()
 	return nil
 }
 
@@ -272,7 +263,7 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 	}
 
 	// Fetch from all remotes
-	fetchArgs := []string{"fetch"}
+	fetchArgs := []string{"fetch", "--all"}
 	if prune {
 		fetchArgs = append(fetchArgs, "--prune")
 	}
@@ -437,11 +428,18 @@ func (r *Repository) GetDefaultBranch() (string, error) {
 	if err == nil {
 		return "main", nil
 	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		return "", fmt.Errorf("failed to check for main branch: %w", err)
+	}
 
 	// Then check if master branch exists
 	_, err = r.execGitCommand(false, "show-ref", "--verify", "--quiet", "refs/heads/master")
 	if err == nil {
 		return "master", nil
+	}
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		return "", fmt.Errorf("failed to check for master branch: %w", err)
 	}
 
 	// If neither exists, return the current branch as a fallback
@@ -496,7 +494,10 @@ func (r *Repository) MarkStaleBranches(status *RepositoryStatus, threshold time.
 
 	status.StaleBranchThreshold = threshold
 
-	defaultBranch, _ := r.GetDefaultBranch()
+	defaultBranch, err := r.GetDefaultBranch()
+	if err != nil {
+		return fmt.Errorf("failed to get default branch: %w", err)
+	}
 	cutoff := time.Now().Add(-threshold)
 
 	for i, branch := range status.Branches {
@@ -680,13 +681,6 @@ func parseBranchInfo(line string) *BranchInfo {
 	return branch
 }
 
-// Fetch fetches from remotes
-func (r *Repository) Fetch(args []string) error {
-	fetchArgs := append([]string{"fetch"}, args...)
-	_, err := r.execGitCommand(true, fetchArgs...)
-	return err
-}
-
 // GetCurrentBranch gets the current branch name
 func (r *Repository) GetCurrentBranch() (string, error) {
 	output, err := r.execGitCommand(false, "rev-parse", "--abbrev-ref", "HEAD")
@@ -705,44 +699,6 @@ func (r *Repository) Checkout(branchOrArgs ...string) error {
 		return fmt.Errorf("failed to checkout: %w", err)
 	}
 	return nil
-}
-
-// Pull pulls changes
-func (r *Repository) Pull(args []string) error {
-	pullArgs := append([]string{"pull"}, args...)
-	_, err := r.execGitCommand(true, pullArgs...)
-	if err != nil {
-		return fmt.Errorf("failed to pull: %w", err)
-	}
-	return nil
-}
-
-// GetRemoteBranches gets a list of remote branches
-func (r *Repository) GetRemoteBranches() ([]string, error) {
-	output, err := r.execGitCommand(false, "branch", "-r")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get remote branches: %w", err)
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	var branches []string
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-
-		// Skip HEAD entry
-		if strings.Contains(line, "HEAD") {
-			continue
-		}
-
-		// Extract branch name from "origin/branch-name"
-		parts := strings.SplitN(line, "/", 2)
-		if len(parts) == 2 {
-			branches = append(branches, parts[1])
-		}
-	}
-
-	return branches, nil
 }
 
 // FilterRepositories filters repositories based on host, org, and repo
@@ -820,7 +776,7 @@ func CreateRepositoryFromPath(path string) (*Repository, error) {
 }
 
 // FindRepositories finds repositories based on filters
-func FindRepositories(rootDir, host, org, repo, path string, all bool) ([]*Repository, error) {
+func FindRepositories(rootDir, host, org, repo, path string) ([]*Repository, error) {
 	var repositories []*Repository
 
 	// If path is specified, only check that path

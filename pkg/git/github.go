@@ -26,7 +26,6 @@ type githubRepository struct {
 	Owner struct {
 		Login string `json:"login"`
 	} `json:"owner"`
-	URL string `json:"url"`
 }
 
 // ListGitHubRepositories lists repositories from a GitHub organization or username
@@ -41,7 +40,7 @@ func ListGitHubRepositoriesWithExecutor(owner string, executor GithubCommandExec
 	if owner != "" {
 		args = append(args, owner)
 	}
-	args = append(args, "--json", "name,owner,url")
+	args = append(args, "--json", "name,owner")
 	args = append(args, "--limit", fmt.Sprintf("%d", 1000))
 
 	// Execute the GitHub CLI command

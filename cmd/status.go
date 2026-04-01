@@ -16,7 +16,6 @@ var (
 	organizationFilter string
 	repositoryFilter   string
 	pathFilter         string
-	allRepositories    bool
 	displayAll         bool
 	olderThan          string
 )
@@ -34,7 +33,7 @@ branch status, and other important information.`,
 		}
 
 		// Find repositories based on filters
-		repositories, err := git.FindRepositories(cfg.RootDirectory, hostFilter, organizationFilter, repositoryFilter, pathFilter, allRepositories)
+		repositories, err := git.FindRepositories(cfg.RootDirectory, hostFilter, organizationFilter, repositoryFilter, pathFilter)
 		if err != nil {
 			return fmt.Errorf("failed to find repositories: %w", err)
 		}
@@ -54,34 +53,55 @@ branch status, and other important information.`,
 		var wg sync.WaitGroup
 		wg.Add(len(repositories))
 
-		// Process repositories in parallel
+		// Process repositories in parallel, collecting results
+		type repoStatus struct {
+			status *git.RepositoryStatus
+			warn   string
+		}
+		results := make([]repoStatus, 0, len(repositories))
+		var mu sync.Mutex
+
 		for _, repo := range repositories {
 			go func(r *git.Repository) {
 				defer wg.Done()
 
-				// Update repository (fetch remote branches)
-				r.Update(true, false)
+				// Fetch remote branches; warn but continue on failure
+				if _, fetchErr := r.Update(true, false); fetchErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to fetch %s: %v\n", r.Path, fetchErr)
+				}
 
 				// Get repository status
 				status, statusErr := r.Status()
 				if statusErr != nil {
-					fmt.Printf("Warning: failed to get status for %s: %v\n", r.Path, statusErr)
+					mu.Lock()
+					results = append(results, repoStatus{warn: fmt.Sprintf("Warning: failed to get status for %s: %v", r.Path, statusErr)})
+					mu.Unlock()
 					return
 				}
 
 				// Mark stale branches
 				if markErr := r.MarkStaleBranches(status, threshold); markErr != nil {
-					fmt.Printf("Warning: failed to check stale branches for %s: %v\n", r.Path, markErr)
+					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to check stale branches for %s: %v\n", r.Path, markErr)
 				}
 
-				if status.HasIssues() || displayAll {
-					tui.StatusRender(status)
-				}
-
+				mu.Lock()
+				results = append(results, repoStatus{status: status})
+				mu.Unlock()
 			}(repo)
 		}
 
 		wg.Wait()
+
+		// Render sequentially after all goroutines finish
+		for _, r := range results {
+			if r.warn != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), r.warn)
+				continue
+			}
+			if r.status.HasIssues() || displayAll {
+				tui.StatusRender(r.status)
+			}
+		}
 		return nil
 	},
 }
@@ -94,7 +114,6 @@ func init() {
 	statusCmd.Flags().StringVar(&organizationFilter, "org", "", "Filter repositories by organization/username")
 	statusCmd.Flags().StringVar(&repositoryFilter, "repo", "", "Filter repositories by name")
 	statusCmd.Flags().StringVar(&pathFilter, "path", "", "Filter repositories by path")
-	statusCmd.Flags().BoolVar(&allRepositories, "all", false, "Check all repositories")
 	statusCmd.Flags().BoolVar(&displayAll, "display-all", false, "Display all repositories")
 	statusCmd.Flags().StringVar(&olderThan, "older-than", "1m", "Threshold for stale branch detection (e.g., 30d, 4w, 1m)")
 

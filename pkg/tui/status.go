@@ -12,60 +12,50 @@ func StatusRender(status *git.RepositoryStatus) {
 	// Render the repository status
 	fmt.Printf("=== %s/%s/%s ===\n", status.Repository.Host, status.Repository.Organization, status.Repository.Name)
 
-	hasIssues := false
-
 	// Check for branches behind remote
 	if status.HasBranchesBehindRemote {
 		branchesBehind := getBranchesWithIssue(status.Branches, func(b git.BranchInfo) bool {
 			return b.Behind > 0
-		})
+		}, true)
 		fmt.Printf("❌ Branches behind remote: %s\n", branchesBehind)
-		hasIssues = true
 	}
 
 	// Check for branches with remote gone
 	if status.HasBranchesWithRemoteGone {
 		branchesGone := getBranchesWithIssue(status.Branches, func(b git.BranchInfo) bool {
 			return b.RemoteGone
-		})
+		}, false)
 		fmt.Printf("❌ Branches with remote gone: %s\n", branchesGone)
-		hasIssues = true
 	}
 
 	// Check for branches without remote
 	if status.HasBranchesWithoutRemote {
 		branchesNoRemote := getBranchesWithIssue(status.Branches, func(b git.BranchInfo) bool {
 			return b.NoRemoteTracking
-		})
+		}, false)
 		fmt.Printf("❌ Branches without remote: %s\n", branchesNoRemote)
-		hasIssues = true
 	}
 
 	// Check for stale branches
 	if status.HasStaleBranches {
 		staleBranches := getStaleBranchesDisplay(status)
 		fmt.Printf("❌ Stale branches: %s\n", staleBranches)
-		hasIssues = true
 	}
 
 	// Check for uncommitted changes
 	if status.HasUncommittedChanges {
 		fmt.Println("❌ Uncommitted changes")
-		hasIssues = true
 	}
 
-	if !hasIssues {
+	if !status.HasIssues() {
 		fmt.Println("✅ Repository is clean")
 	}
 	fmt.Println()
 }
 
-func AllStatusCleanRender() {
-	fmt.Println(" ✅ All repositories are clean")
-}
-
-// getBranchesWithIssue returns a comma-separated list of branch names that match the given condition
-func getBranchesWithIssue(branches []git.BranchInfo, condition func(git.BranchInfo) bool) string {
+// getBranchesWithIssue returns a comma-separated list of branch names that match the given condition.
+// For branches that are behind their remote, the count is appended only when includeBehind is true.
+func getBranchesWithIssue(branches []git.BranchInfo, condition func(git.BranchInfo) bool, includeBehind bool) string {
 	var problematicBranches []string
 
 	for _, branch := range branches {
@@ -77,7 +67,7 @@ func getBranchesWithIssue(branches []git.BranchInfo, condition func(git.BranchIn
 			}
 
 			// For branches behind remote, include how many commits behind
-			if branch.Behind > 0 {
+			if includeBehind && branch.Behind > 0 {
 				branchName = fmt.Sprintf("%s (%d behind)", branchName, branch.Behind)
 			}
 
@@ -92,6 +82,8 @@ func getBranchesWithIssue(branches []git.BranchInfo, condition func(git.BranchIn
 func formatBranchAge(commitDate time.Time) string {
 	days := int(time.Since(commitDate).Hours() / 24)
 	switch {
+	case days == 0:
+		return "today"
 	case days < 7:
 		return fmt.Sprintf("%d days", days)
 	case days < 30:

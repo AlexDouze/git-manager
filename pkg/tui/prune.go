@@ -10,10 +10,10 @@ import (
 
 // RenderPruneResults renders the results of pruning branches in the terminal
 // using the same style as StatusRender and UpdateRender
-func RenderPruneResults(pruneResults map[string]git.PruneResult, isDryRun bool) error {
+func RenderPruneResults(pruneResults map[string]git.PruneResult, isDryRun bool) {
 	// No results to display
 	if len(pruneResults) == 0 {
-		return nil
+		return
 	}
 
 	// Print dry run warning if applicable
@@ -52,6 +52,4 @@ func RenderPruneResults(pruneResults map[string]git.PruneResult, isDryRun bool) 
 
 		fmt.Println()
 	}
-
-	return nil
 }

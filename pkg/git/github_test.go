@@ -29,7 +29,6 @@ func TestListGitHubRepositoriesWithExecutor(t *testing.T) {
 			}{
 				Login: "user1",
 			},
-			URL: "https://github.com/user1/repo1",
 		},
 		{
 			Name: "repo2",
@@ -38,7 +37,6 @@ func TestListGitHubRepositoriesWithExecutor(t *testing.T) {
 			}{
 				Login: "user1",
 			},
-			URL: "https://github.com/user1/repo2",
 		},
 	}
 
@@ -63,7 +61,7 @@ func TestListGitHubRepositoriesWithExecutor(t *testing.T) {
 	}
 
 	// Verify the correct arguments were passed to the executor
-	expectedArgs := []string{"repo", "list", "user1", "--json", "name,owner,url", "--limit", "1000"}
+	expectedArgs := []string{"repo", "list", "user1", "--json", "name,owner", "--limit", "1000"}
 	if !reflect.DeepEqual(mockExecutor.CalledWith, expectedArgs) {
 		t.Errorf("Expected args %v, got %v", expectedArgs, mockExecutor.CalledWith)
 	}
@@ -103,7 +101,7 @@ func TestListGitHubRepositoriesWithExecutorNoOwner(t *testing.T) {
 	}
 
 	// Verify the correct arguments were passed to the executor (no owner)
-	expectedArgs := []string{"repo", "list", "--json", "name,owner,url", "--limit", "1000"}
+	expectedArgs := []string{"repo", "list", "--json", "name,owner", "--limit", "1000"}
 	if !reflect.DeepEqual(mockExecutor.CalledWith, expectedArgs) {
 		t.Errorf("Expected args %v, got %v", expectedArgs, mockExecutor.CalledWith)
 	}

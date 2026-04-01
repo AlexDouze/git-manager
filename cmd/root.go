@@ -46,7 +46,6 @@ func initConfig() {
 
 		viper.AddConfigPath(".")
 		viper.AddConfigPath(home)
-		viper.SetConfigName("gitm")
 		viper.SetConfigName(".gitm")
 		viper.SetConfigType("yaml")
 	}

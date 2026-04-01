@@ -32,7 +32,7 @@ Examples:
   # List repositories from a GitHub organization and clone to a specific directory
   gitm gh-clone alexdouze --root-dir ~/projects`,
 	Args: cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		// Set owner from args if provided
 		if len(args) > 0 {
 			ghCloneOwner = args[0]
@@ -46,8 +46,7 @@ Examples:
 		// Load configuration
 		cfg, err := config.LoadConfig()
 		if err != nil {
-			fmt.Printf("Failed to load configuration: %s\n", err)
-			return
+			return fmt.Errorf("failed to load configuration: %w", err)
 		}
 
 		// Use specified root directory or default from config
@@ -59,18 +58,16 @@ Examples:
 		// List repositories using GitHub CLI
 		repos, err := git.ListGitHubRepositories(ghCloneOwner)
 		if err != nil {
-			fmt.Printf("Failed to list repositories: %s\n", err)
-			return
+			return fmt.Errorf("failed to list repositories: %w", err)
 		}
 
 		if len(repos) == 0 {
 			fmt.Println("No repositories found.")
-			return
+			return nil
 		}
 		selectedRepos, err := tui.SelectGithubReposRender(repos)
 		if err != nil {
-			fmt.Printf("Failed to select repositories: %s\n", err)
-			return
+			return fmt.Errorf("failed to select repositories: %w", err)
 		}
 
 		var cloneOptions []string
@@ -79,14 +76,14 @@ Examples:
 		}
 
 		for _, repo := range selectedRepos {
-			url := fmt.Sprintf("git@github.com:%s/%s.git", repo.Organization, repo.Name)
-			err = repo.Clone(targetDir, url, cloneOptions)
-			if err != nil {
-				fmt.Printf("❌ Error cloning repository %s: %s", repo.Name, err)
+			url := fmt.Sprintf("git@%s:%s/%s.git", repo.Host, repo.Organization, repo.Name)
+			if err = repo.Clone(targetDir, url, cloneOptions); err != nil {
+				fmt.Printf("❌ Error cloning repository %s: %s\n", repo.Name, err)
 			} else {
 				fmt.Printf("✅ Repository %s cloned successfully in %s\n", repo.Name, repo.Path)
 			}
 		}
+		return nil
 	},
 }
 

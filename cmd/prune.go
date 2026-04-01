@@ -74,7 +74,7 @@ Examples:
 		}
 
 		// Find repositories based on filters
-		repositories, err := git.FindRepositories(cfg.RootDirectory, pruneHostFilter, pruneOrgFilter, pruneRepoFilter, prunePathFilter, pruneAllRepos)
+		repositories, err := git.FindRepositories(cfg.RootDirectory, pruneHostFilter, pruneOrgFilter, pruneRepoFilter, prunePathFilter)
 		if err != nil {
 			return fmt.Errorf("failed to find repositories: %w", err)
 		}
@@ -131,7 +131,8 @@ func pruneRepositories(repositories []*git.Repository) error {
 	wg.Wait()
 
 	// Display results using the terminal UI
-	return tui.RenderPruneResults(pruneResults, dryRun)
+	tui.RenderPruneResults(pruneResults, dryRun)
+	return nil
 }
 
 func init() {

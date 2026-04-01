@@ -8,15 +8,15 @@ import (
 	"github.com/rivo/tview"
 )
 
-type Item struct {
+type item struct {
 	Repo     git.Repository
 	Selected bool
 }
 
 func SelectGithubReposRender(repos []git.Repository) ([]git.Repository, error) {
-	var items []Item
+	var items []item
 	for _, repo := range repos {
-		items = append(items, Item{Repo: repo, Selected: false})
+		items = append(items, item{Repo: repo, Selected: false})
 	}
 
 	app := tview.NewApplication()
@@ -27,8 +27,6 @@ func SelectGithubReposRender(repos []git.Repository) ([]git.Repository, error) {
 		SetLabel("Filter: ").
 		SetFieldWidth(30)
 
-	// Track if we're in filter mode
-	// filterMode := false
 	filterText := ""
 
 	// Function to update the displayed list based on current filter
@@ -58,11 +56,9 @@ func SelectGithubReposRender(repos []git.Repository) ([]git.Repository, error) {
 	filterInput.SetDoneFunc(func(key tcell.Key) {
 		if key == tcell.KeyEnter {
 			filterText = filterInput.GetText()
-			// filterMode = false
 			updateList()
 			app.SetFocus(list)
 		} else if key == tcell.KeyEsc {
-			// filterMode = false
 			app.SetFocus(list)
 		}
 	})
@@ -89,7 +85,6 @@ func SelectGithubReposRender(repos []git.Repository) ([]git.Repository, error) {
 		case event.Key() == tcell.KeyRune:
 			if event.Rune() == '/' {
 				// Enter filter mode
-				// filterMode = true
 				filterInput.SetText("")
 				app.SetFocus(filterInput)
 				return nil
@@ -130,7 +125,7 @@ func SelectGithubReposRender(repos []git.Repository) ([]git.Repository, error) {
 
 	// Start the application
 	if err := app.SetRoot(flex, true).Run(); err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	var res []git.Repository

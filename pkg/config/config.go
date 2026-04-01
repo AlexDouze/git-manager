@@ -35,13 +35,6 @@ func LoadConfig() (*Config, error) {
 	return &config, nil
 }
 
-// SaveConfig saves the configuration to the config file
-func SaveConfig(config *Config) error {
-	viper.Set("rootDirectory", config.RootDirectory)
-	viper.Set("clone.defaultOptions", config.Clone.DefaultOptions)
-	return viper.WriteConfig()
-}
-
 // InitConfig initializes a new configuration file
 func InitConfig() error {
 	home, err := os.UserHomeDir()
@@ -55,5 +48,5 @@ func InitConfig() error {
 	viper.Set("rootDirectory", filepath.Join(home, "Codebase"))
 	viper.Set("clone.defaultOptions", "--recurse-submodules")
 
-	return viper.WriteConfig()
+	return viper.SafeWriteConfig()
 }

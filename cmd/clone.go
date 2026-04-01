@@ -18,24 +18,25 @@ var cloneCmd = &cobra.Command{
 	Long: `Clone a git repository into a structured directory hierarchy.
 The repository will be cloned into <root-directory>/<host>/<organization>/<repository>.`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		url := args[0]
 
 		// Load configuration
 		cfg, err := config.LoadConfig()
 		if err != nil {
-			fmt.Printf("failed to load configuration: %s", err)
-			return
+			return fmt.Errorf("failed to load configuration: %w", err)
 		}
 
 		// Use specified root directory or default from config
 		targetDir := cfg.RootDirectory
+		if rootDir != "" {
+			targetDir = rootDir
+		}
 
 		// Parse the repository URL
 		repo, err := git.ParseURL(url)
 		if err != nil {
-			fmt.Printf("failed to parse repository URL: %s", err)
-			return
+			return fmt.Errorf("failed to parse repository URL: %w", err)
 		}
 
 		// Parse clone options
@@ -48,15 +49,13 @@ The repository will be cloned into <root-directory>/<host>/<organization>/<repos
 		fmt.Printf("Cloning %s to %s/%s/%s/%s\n",
 			url, targetDir, repo.Host, repo.Organization, repo.Name)
 
-		err = repo.Clone(targetDir, url, cloneOptions)
-		if err != nil {
-			fmt.Printf("failed to clone repository: %s", err)
-			return
+		if err = repo.Clone(targetDir, url, cloneOptions); err != nil {
+			return fmt.Errorf("failed to clone repository: %w", err)
 		}
 
 		fmt.Printf("Successfully cloned repository to %s/%s/%s/%s\n",
 			targetDir, repo.Host, repo.Organization, repo.Name)
-
+		return nil
 	},
 }
 
