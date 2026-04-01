@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // GitCommandExecutor defines an interface for executing git commands
@@ -447,6 +448,79 @@ func (r *Repository) GetDefaultBranch() (string, error) {
 	return r.GetCurrentBranch()
 }
 
+// populateBranchCommitDates fetches the last commit date for each local branch
+// using a single git for-each-ref call and maps the dates onto the status branches.
+func (r *Repository) populateBranchCommitDates(status *RepositoryStatus) error {
+	output, err := r.execGitCommand(false, "for-each-ref",
+		"--format=%(refname:short) %(committerdate:iso8601)",
+		"refs/heads/")
+	if err != nil {
+		return err
+	}
+
+	dateMap := make(map[string]time.Time)
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		spaceIdx := strings.Index(line, " ")
+		if spaceIdx == -1 {
+			continue
+		}
+		branchName := line[:spaceIdx]
+		dateStr := strings.TrimSpace(line[spaceIdx:])
+		t, parseErr := time.Parse("2006-01-02 15:04:05 -0700", dateStr)
+		if parseErr != nil {
+			continue
+		}
+		dateMap[branchName] = t
+	}
+
+	for i := range status.Branches {
+		if date, ok := dateMap[status.Branches[i].Name]; ok {
+			status.Branches[i].LastCommitDate = date
+		}
+	}
+
+	return nil
+}
+
+// MarkStaleBranches populates commit dates and marks branches as stale based on
+// the given threshold. The default branch is excluded. For each stale branch,
+// it also computes the number of commits it is behind the default branch.
+func (r *Repository) MarkStaleBranches(status *RepositoryStatus, threshold time.Duration) error {
+	if err := r.populateBranchCommitDates(status); err != nil {
+		return fmt.Errorf("failed to get branch commit dates: %w", err)
+	}
+
+	status.StaleBranchThreshold = threshold
+
+	defaultBranch, _ := r.GetDefaultBranch()
+	cutoff := time.Now().Add(-threshold)
+
+	for i, branch := range status.Branches {
+		if branch.Name == defaultBranch {
+			continue
+		}
+		if branch.LastCommitDate.IsZero() || !branch.LastCommitDate.Before(cutoff) {
+			continue
+		}
+		status.HasStaleBranches = true
+
+		// Count commits behind the default branch
+		out, err := r.execGitCommand(false, "rev-list", "--count", branch.Name+".."+defaultBranch)
+		if err == nil {
+			count := strings.TrimSpace(string(out))
+			n := 0
+			fmt.Sscanf(count, "%d", &n)
+			status.Branches[i].CommitsBehindDefault = n
+		}
+	}
+
+	return nil
+}
+
 // identifyBranchesToPrune determines which branches should be pruned based on criteria
 func (r *Repository) identifyBranchesToPrune(status *RepositoryStatus, goneOnly, mergedOnly bool, pruneCurrent bool) ([]string, error) {
 	var branchesToPrune []string
@@ -505,30 +579,34 @@ func (r *Repository) identifyBranchesToPrune(status *RepositoryStatus, goneOnly,
 
 // BranchInfo contains information about a git branch
 type BranchInfo struct {
-	Name             string // Branch name
-	Current          bool   // Whether this is the current branch
-	RemoteTracking   string // Remote tracking branch (e.g., "origin/main")
-	NoRemoteTracking bool   // Whether this branch has no remote tracking
-	RemoteGone       bool   // Whether the remote tracking branch is gone
-	Ahead            int    // Number of commits ahead of remote
-	Behind           int    // Number of commits behind remote
+	Name                string    // Branch name
+	Current             bool      // Whether this is the current branch
+	RemoteTracking      string    // Remote tracking branch (e.g., "origin/main")
+	NoRemoteTracking    bool      // Whether this branch has no remote tracking
+	RemoteGone          bool      // Whether the remote tracking branch is gone
+	Ahead               int       // Number of commits ahead of remote
+	Behind              int       // Number of commits behind remote
+	LastCommitDate      time.Time // Date of the last commit on this branch
+	CommitsBehindDefault int      // Number of commits behind the default branch
 }
 
 // RepositoryStatus contains the status information of a repository
 type RepositoryStatus struct {
-	Repository                *Repository  // Reference to the repository
-	HasUncommittedChanges     bool         // Whether there are uncommitted changes
-	UncommittedChanges        []string     // List of uncommitted changes
-	Branches                  []BranchInfo // List of branches
-	CurrentBranch             string       // Name of the current branch
-	HasBranchesWithoutRemote  bool         // Whether there are branches without remote tracking
-	HasBranchesWithRemoteGone bool         // Whether there are branches with remote gone
-	HasBranchesBehindRemote   bool         // Whether there are branches behind remote
-	StashCount                int          // Number of stashes
+	Repository                *Repository   // Reference to the repository
+	HasUncommittedChanges     bool          // Whether there are uncommitted changes
+	UncommittedChanges        []string      // List of uncommitted changes
+	Branches                  []BranchInfo  // List of branches
+	CurrentBranch             string        // Name of the current branch
+	HasBranchesWithoutRemote  bool          // Whether there are branches without remote tracking
+	HasBranchesWithRemoteGone bool          // Whether there are branches with remote gone
+	HasBranchesBehindRemote   bool          // Whether there are branches behind remote
+	StashCount                int           // Number of stashes
+	HasStaleBranches          bool          // Whether there are stale branches
+	StaleBranchThreshold      time.Duration // Threshold used for stale detection
 }
 
 func (s RepositoryStatus) HasIssues() bool {
-	return s.HasUncommittedChanges || s.HasBranchesWithoutRemote || s.HasBranchesWithRemoteGone || s.HasBranchesBehindRemote
+	return s.HasUncommittedChanges || s.HasBranchesWithoutRemote || s.HasBranchesWithRemoteGone || s.HasBranchesBehindRemote || s.HasStaleBranches
 }
 
 // parseBranchInfo parses a line from git branch -vv output

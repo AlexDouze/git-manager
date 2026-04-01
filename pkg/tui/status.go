@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/alexDouze/gitm/pkg/git"
 )
@@ -40,6 +41,13 @@ func StatusRender(status *git.RepositoryStatus) {
 		hasIssues = true
 	}
 
+	// Check for stale branches
+	if status.HasStaleBranches {
+		staleBranches := getStaleBranchesDisplay(status)
+		fmt.Printf("❌ Stale branches: %s\n", staleBranches)
+		hasIssues = true
+	}
+
 	// Check for uncommitted changes
 	if status.HasUncommittedChanges {
 		fmt.Println("❌ Uncommitted changes")
@@ -59,7 +67,7 @@ func AllStatusCleanRender() {
 // getBranchesWithIssue returns a comma-separated list of branch names that match the given condition
 func getBranchesWithIssue(branches []git.BranchInfo, condition func(git.BranchInfo) bool) string {
 	var problematicBranches []string
-	
+
 	for _, branch := range branches {
 		if condition(branch) {
 			// Add a * marker for the current branch
@@ -67,15 +75,76 @@ func getBranchesWithIssue(branches []git.BranchInfo, condition func(git.BranchIn
 			if branch.Current {
 				branchName = "*" + branchName
 			}
-			
+
 			// For branches behind remote, include how many commits behind
 			if branch.Behind > 0 {
 				branchName = fmt.Sprintf("%s (%d behind)", branchName, branch.Behind)
 			}
-			
+
 			problematicBranches = append(problematicBranches, branchName)
 		}
 	}
-	
+
 	return strings.Join(problematicBranches, ", ")
+}
+
+// formatBranchAge returns a human-readable string for how long ago the commit was made.
+func formatBranchAge(commitDate time.Time) string {
+	days := int(time.Since(commitDate).Hours() / 24)
+	switch {
+	case days < 7:
+		return fmt.Sprintf("%d days", days)
+	case days < 30:
+		weeks := days / 7
+		if weeks == 1 {
+			return "1 week"
+		}
+		return fmt.Sprintf("%d weeks", weeks)
+	case days < 365:
+		months := days / 30
+		if months == 1 {
+			return "1 month"
+		}
+		return fmt.Sprintf("%d months", months)
+	default:
+		years := days / 365
+		if years == 1 {
+			return "1 year"
+		}
+		return fmt.Sprintf("%d years", years)
+	}
+}
+
+// getStaleBranchesDisplay formats stale branches with name, age, remote status, and commits behind default.
+func getStaleBranchesDisplay(status *git.RepositoryStatus) string {
+	cutoff := time.Now().Add(-status.StaleBranchThreshold)
+	var parts []string
+
+	for _, branch := range status.Branches {
+		if branch.LastCommitDate.IsZero() || !branch.LastCommitDate.Before(cutoff) {
+			continue
+		}
+
+		name := branch.Name
+		if branch.Current {
+			name = "*" + name
+		}
+
+		age := formatBranchAge(branch.LastCommitDate)
+
+		var remoteStatus string
+		switch {
+		case branch.RemoteGone:
+			remoteStatus = "remote gone"
+		case branch.NoRemoteTracking:
+			remoteStatus = "no remote"
+		default:
+			remoteStatus = "has remote"
+		}
+
+		entry := fmt.Sprintf("%s (%s, %s, %d behind)", name, age, remoteStatus, branch.CommitsBehindDefault)
+		parts = append(parts, entry)
+	}
+
+	return strings.Join(parts, ", ")
 }

@@ -18,6 +18,7 @@ var (
 	pathFilter         string
 	allRepositories    bool
 	displayAll         bool
+	olderThan          string
 )
 
 var statusCmd = &cobra.Command{
@@ -43,6 +44,12 @@ branch status, and other important information.`,
 			return nil
 		}
 
+		// Parse stale threshold before processing repos; fail fast on invalid value
+		threshold, err := git.ParseHumanDuration(olderThan)
+		if err != nil {
+			return fmt.Errorf("invalid --older-than value %q: %w", olderThan, err)
+		}
+
 		// Create a wait group to wait for all goroutines to complete
 		var wg sync.WaitGroup
 		wg.Add(len(repositories))
@@ -59,7 +66,14 @@ branch status, and other important information.`,
 				status, statusErr := r.Status()
 				if statusErr != nil {
 					fmt.Printf("Warning: failed to get status for %s: %v\n", r.Path, statusErr)
+					return
 				}
+
+				// Mark stale branches
+				if markErr := r.MarkStaleBranches(status, threshold); markErr != nil {
+					fmt.Printf("Warning: failed to check stale branches for %s: %v\n", r.Path, markErr)
+				}
+
 				if status.HasIssues() || displayAll {
 					tui.StatusRender(status)
 				}
@@ -82,5 +96,6 @@ func init() {
 	statusCmd.Flags().StringVar(&pathFilter, "path", "", "Filter repositories by path")
 	statusCmd.Flags().BoolVar(&allRepositories, "all", false, "Check all repositories")
 	statusCmd.Flags().BoolVar(&displayAll, "display-all", false, "Display all repositories")
+	statusCmd.Flags().StringVar(&olderThan, "older-than", "1m", "Threshold for stale branch detection (e.g., 30d, 4w, 1m)")
 
 }
