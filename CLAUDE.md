@@ -12,6 +12,14 @@
 ### Organization
 - Commands in `cmd/` package
 - Core logic in `pkg/` with subpackages: `config/`, `git/`, `tui/`
+- `pkg/tui/` holds Lip Gloss line-output styles for the scriptable subcommands (`status`/`prune`/`update`); `pkg/tui/app/` is the interactive Bubble Tea v2 app launched by bare `gitm`
+- Bare `gitm` opens the interactive TUI; the `status`/`prune`/`update`/`clone`/`gh-clone`/`config` subcommands stay scriptable (including `--json`)
+
+### Interactive TUI (`pkg/tui/app/`)
+- Bubble Tea v2 (Elm architecture): `Init`/`Update`/`View`; `View()` returns a `tea.View` with `AltScreen = true`
+- Slow git operations NEVER run inside `Update` — each is a `tea.Cmd` closure in `commands.go` that returns a result `Msg` (see `messages.go`); `Update` only mutates model state and returns commands
+- Charm imports use the canonical `charm.land/...` module paths, not `github.com/charmbracelet/...` (the one exception is `github.com/charmbracelet/colorprofile`, which has no `charm.land` alias)
+- Bubble Tea v2 reports the space key as `"space"` (not `" "`) — bind it accordingly in `key.NewBinding`
 
 ### Naming Conventions
 - Use CamelCase for exported functions/types (public)

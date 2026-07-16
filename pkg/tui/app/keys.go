@@ -92,7 +92,9 @@ type ghKeyMap struct {
 func newGHKeyMap() ghKeyMap {
 	return ghKeyMap{
 		Toggle: key.NewBinding(
-			key.WithKeys(" "),
+			// Bubble Tea v2 renders the space key's String() as "space", not " ",
+			// so the binding must use "space" for key.Matches to fire.
+			key.WithKeys("space"),
 			key.WithHelp("space", "select"),
 		),
 		Clone: key.NewBinding(

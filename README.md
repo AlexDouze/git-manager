@@ -4,6 +4,7 @@
 
 ## Features
 
+- **Interactive TUI**: Run `gitm` with no subcommand to open a full-screen, filterable list of your local repositories (built on [Charm](https://charm.land/) / Bubble Tea) with drill-in to branches and shortcuts for refresh, update, prune, and clone.
 - **Structured Repository Organization**: Automatically organizes repositories in a structured directory hierarchy (`<root-directory>/<host>/<organization>/<repository>`).
 - **Multi-Repository Management**: Manage multiple git repositories with a single command.
 - **Repository Status**: Check the status of repositories, showing uncommitted changes, branch status, stale branches, and stash counts.
@@ -102,6 +103,57 @@ gitm config set clone.defaultOptions "--depth 1"
 ```
 
 ## Usage
+
+### Interactive TUI
+
+Run `gitm` with no subcommand to open the interactive terminal UI — a
+full-screen, filterable list of all your local repositories built on the
+[Charm](https://charm.land/) stack (Bubble Tea):
+
+```bash
+gitm
+
+# Open the TUI pre-scoped to a host, organization, repository, or path
+gitm --org username
+```
+
+The repository list loads instantly and status badges (dirty, behind, gone,
+no-remote, stale, stash count) fill in asynchronously so the UI stays
+responsive.
+
+**Repository list**
+
+| Key | Action |
+| --- | --- |
+| `↑`/`↓` or `k`/`j` | Move the cursor |
+| `/` | Filter the list |
+| `enter` | Drill into the selected repo's branches |
+| `r` | Refresh statuses (local re-read, no fetch) |
+| `u` | Update the selected repo (fetch + rebase pull) |
+| `p` | Prune the selected repo's gone branches (asks to confirm) |
+| `c` | Open the GitHub clone browser |
+| `q` / `ctrl+c` | Quit |
+
+**Branch view** (after `enter`)
+
+| Key | Action |
+| --- | --- |
+| `enter` / `c` | Checkout the selected branch |
+| `d` | Delete the selected branch (safe `-d`; unmerged branches prompt to force, worktree-checked-out branches are skipped) |
+| `u` | Update the repo (fetch + rebase pull) |
+| `esc` | Back to the repository list |
+
+**GitHub clone browser** (after `c`)
+
+| Key | Action |
+| --- | --- |
+| `space` | Toggle selection of the highlighted repo (already-cloned repos are skipped) |
+| `enter` | Clone the selected repositories |
+| `/` | Filter the list |
+| `esc` | Cancel |
+
+When stdout is not a terminal (piped or redirected), `gitm` prints help
+instead of opening the TUI, so pipelines and CI stay predictable.
 
 ### Cloning Repositories
 
@@ -219,8 +271,9 @@ gitm/
 │   ├── config/         # Configuration handling
 │   ├── git/            # Git operations
 │   └── tui/            # Terminal UI components
-│       ├── progress.go # Progress indicator
-│       └── style.go    # Color styles
+│       ├── app/        # Interactive Bubble Tea app (bare `gitm`)
+│       ├── progress.go # Progress indicator (subcommand stderr)
+│       └── style.go    # Lip Gloss line-output styles
 ├── main.go             # Entry point
 └── Makefile            # Build instructions
 ```
