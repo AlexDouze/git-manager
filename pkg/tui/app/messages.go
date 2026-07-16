@@ -33,3 +33,29 @@ type branchesLoadedMsg struct {
 	branches []git.BranchInfo
 	err      error
 }
+
+// opKind names the kind of action an opDoneMsg reports, so Update can decide
+// what to refresh afterwards and the footer can describe what happened.
+type opKind int
+
+const (
+	opCheckout opKind = iota
+	opUpdate
+	opDeleteBranch
+)
+
+// opDoneMsg reports the completion of a mutating git action (checkout, update,
+// delete). path is the repo the action ran against; branch is the branch acted
+// on when relevant. summary is a short human-readable result for the footer.
+//
+// notFullyMerged is set when a safe branch delete was refused because the branch
+// was not fully merged; the app turns that into a force-delete confirm prompt
+// rather than a plain error.
+type opDoneMsg struct {
+	kind           opKind
+	path           string
+	branch         string
+	summary        string
+	err            error
+	notFullyMerged bool
+}

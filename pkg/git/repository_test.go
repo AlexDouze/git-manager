@@ -1115,6 +1115,71 @@ func TestCheckout(t *testing.T) {
 	})
 }
 
+func TestDeleteBranch(t *testing.T) {
+	repo := NewTestRepository()
+	repo.Path = "/mock/path"
+
+	t.Run("safe delete success", func(t *testing.T) {
+		var gotArgs []string
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
+				gotArgs = args
+				return nil, nil
+			},
+		})
+		if err := repo.Repository.DeleteBranch(context.Background(), "feature", false); err != nil {
+			t.Fatalf("DeleteBranch() error = %v, want nil", err)
+		}
+		want := []string{"branch", "-d", "feature"}
+		if len(gotArgs) != 3 || gotArgs[0] != want[0] || gotArgs[1] != want[1] || gotArgs[2] != want[2] {
+			t.Errorf("DeleteBranch() args = %v, want %v", gotArgs, want)
+		}
+	})
+
+	t.Run("force delete uses -D", func(t *testing.T) {
+		var gotArgs []string
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
+				gotArgs = args
+				return nil, nil
+			},
+		})
+		if err := repo.Repository.DeleteBranch(context.Background(), "feature", true); err != nil {
+			t.Fatalf("DeleteBranch() error = %v, want nil", err)
+		}
+		if len(gotArgs) != 3 || gotArgs[1] != "-D" {
+			t.Errorf("DeleteBranch() args = %v, want -D flag", gotArgs)
+		}
+	})
+
+	t.Run("not fully merged maps to sentinel", func(t *testing.T) {
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
+				return nil, errors.New("error: the branch 'feature' is not fully merged")
+			},
+		})
+		err := repo.Repository.DeleteBranch(context.Background(), "feature", false)
+		if !errors.Is(err, ErrBranchNotFullyMerged) {
+			t.Errorf("DeleteBranch() error = %v, want ErrBranchNotFullyMerged", err)
+		}
+	})
+
+	t.Run("other errors are wrapped", func(t *testing.T) {
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
+				return nil, errors.New("fatal: branch 'feature' not found")
+			},
+		})
+		err := repo.Repository.DeleteBranch(context.Background(), "feature", false)
+		if err == nil {
+			t.Fatal("DeleteBranch() error = nil, want error")
+		}
+		if errors.Is(err, ErrBranchNotFullyMerged) {
+			t.Errorf("DeleteBranch() = ErrBranchNotFullyMerged, want generic error")
+		}
+	})
+}
+
 func TestGetDefaultBranch(t *testing.T) {
 	// A fresh repo per subtest — GetDefaultBranch memoizes, so state must not
 	// leak between cases.
