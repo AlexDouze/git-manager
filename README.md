@@ -134,6 +134,7 @@ responsive.
 | `U` | Update **all** repos at once (fetch + rebase pull) |
 | `P` | Prune **all** repos' gone branches at once (asks to confirm) |
 | `c` | Open the GitHub clone browser |
+| `o` | Open the selected repo in `$EDITOR` (falls back to `vi`) |
 | `q` / `ctrl+c` | Quit |
 
 A repo actively being updated or pruned shows a "updating…"/"pruning…" indicator

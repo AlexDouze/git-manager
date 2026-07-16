@@ -333,6 +333,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m.pruneAllRepos()
 		case key.Matches(msg, m.repoKeys.Clone):
 			return m.openGHBrowse()
+		case key.Matches(msg, m.repoKeys.Open):
+			return m.openSelectedRepoEditor()
 		}
 
 	case screenBranches:
@@ -427,6 +429,16 @@ func (m Model) updateSelectedRepo() (tea.Model, tea.Cmd) {
 	m.footerErr = false
 	setCmd := m.setRepoBusy(sel.repo.Path, "updating…")
 	return m, tea.Batch(setCmd, updateCmd(m.ctx, sel.repo))
+}
+
+// openSelectedRepoEditor launches $EDITOR on the repo highlighted in the repo
+// list, suspending the TUI until the editor exits.
+func (m Model) openSelectedRepoEditor() (tea.Model, tea.Cmd) {
+	sel, ok := m.repos.SelectedItem().(repoItem)
+	if !ok {
+		return m, nil
+	}
+	return m, openEditorCmd(sel.repo)
 }
 
 // pruneSelectedRepo asks for confirmation, then prunes gone branches in the

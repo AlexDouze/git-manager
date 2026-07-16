@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -397,6 +398,47 @@ func TestUpdateSelectedRepoMarksRowBusy(t *testing.T) {
 	}
 }
 
+func TestOpenEditorReturnsCommand(t *testing.T) {
+	m := seededModel(t, "alpha", "beta")
+
+	tm, cmd := m.Update(keyPress("o"))
+	m = tm.(Model)
+	if cmd == nil {
+		t.Fatal("o should return a command")
+	}
+	// Pressing o must not itself mutate any row state (unlike u/p) -- the
+	// editor runs out-of-band via tea.ExecProcess.
+	for _, li := range m.repos.Items() {
+		if li.(repoItem).busy {
+			t.Error("o should not mark any row busy")
+		}
+	}
+}
+
+func TestOpenEditorNoSelectionIsNoop(t *testing.T) {
+	m := seededModel(t) // no repos
+
+	tm, cmd := m.Update(keyPress("o"))
+	m = tm.(Model)
+	if cmd != nil {
+		t.Error("o with no repos selected should be a no-op")
+	}
+}
+
+func TestOpenEditorOpDoneSetsFooter(t *testing.T) {
+	m := seededModel(t, "alpha")
+	path := m.repos.Items()[0].(repoItem).repo.Path
+
+	tm, _ := m.Update(opDoneMsg{kind: opOpenEditor, path: path, summary: "closed editor for alpha"})
+	m = tm.(Model)
+	if m.footer != "closed editor for alpha" {
+		t.Errorf("footer = %q, want the editor summary", m.footer)
+	}
+	if m.footerErr {
+		t.Error("a successful editor session should not set footerErr")
+	}
+}
+
 func TestFilterSuppressesShortcuts(t *testing.T) {
 	m := seededModel(t, "alpha", "beta")
 
@@ -567,6 +609,48 @@ func TestCheckoutCmd(t *testing.T) {
 			msg := checkoutCmd(context.Background(), r, "feature")().(opDoneMsg)
 			if msg.kind != opCheckout {
 				t.Errorf("kind = %v, want opCheckout", msg.kind)
+			}
+			if (msg.err != nil) != tc.wantErr {
+				t.Errorf("err = %v, wantErr = %v", msg.err, tc.wantErr)
+			}
+			if !strings.Contains(msg.summary, tc.wantSubstr) {
+				t.Errorf("summary = %q, want it to contain %q", msg.summary, tc.wantSubstr)
+			}
+		})
+	}
+}
+
+func TestOpenEditorCmd(t *testing.T) {
+	tests := []struct {
+		name       string
+		editor     string
+		wantErr    bool
+		wantSubstr string
+	}{
+		{name: "success", editor: "true", wantErr: false, wantSubstr: "closed editor for alpha"},
+		{name: "failure", editor: "false", wantErr: true, wantSubstr: "editor failed"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("EDITOR", tc.editor)
+			r := newRepo("alpha")
+
+			cmd := openEditorCmd(r)
+			if cmd == nil {
+				t.Fatal("openEditorCmd returned a nil command")
+			}
+			// openEditorCmd wraps tea.ExecProcess, whose Msg is only produced by
+			// running the ExecCommand and invoking the callback -- exercise that
+			// directly rather than through a live tea.Program.
+			execCmd := exec.Command(tc.editor, r.Path)
+			err := execCmd.Run()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("running %q on %q: err = %v, wantErr = %v", tc.editor, r.Path, err, tc.wantErr)
+			}
+
+			msg := openEditorMsg(r, err).(opDoneMsg)
+			if msg.kind != opOpenEditor {
+				t.Errorf("kind = %v, want opOpenEditor", msg.kind)
 			}
 			if (msg.err != nil) != tc.wantErr {
 				t.Errorf("err = %v, wantErr = %v", msg.err, tc.wantErr)
