@@ -254,11 +254,28 @@ type BranchUpdateResult struct {
 	Err    error
 }
 
+// PruneOptions configures a PruneBranches call.
+type PruneOptions struct {
+	GoneOnly    bool // Prune branches whose upstream is gone
+	MergedOnly  bool // Prune branches merged into the default branch
+	DryRun      bool // Report what would be pruned without deleting
+	KeepCurrent bool // Never prune the current branch
+	Force       bool // Use `git branch -D` instead of the safe `-d`
+}
+
+// SkippedBranch records a branch that was a prune candidate but not deleted,
+// along with the reason it was skipped.
+type SkippedBranch struct {
+	Name   string
+	Reason string
+}
+
 // PruneResult represents the result of a branch pruning operation
 type PruneResult struct {
-	Repository     *Repository
-	PrunedBranches []string
-	Error          error
+	Repository      *Repository
+	PrunedBranches  []string
+	SkippedBranches []SkippedBranch
+	Error           error
 }
 
 // Update updates the repository (fetch and optionally pull)
@@ -374,11 +391,16 @@ func (r *Repository) Update(ctx context.Context, fetchOnly, prune bool) (*Update
 	}, nil
 }
 
-// PruneBranches prunes branches based on criteria
-// By default, it will prune the current branch if its remote is gone by checking out the default branch first
-// Set noPruneCurrent to true to disable pruning the current branch
-func (r *Repository) PruneBranches(ctx context.Context, goneOnly, mergedOnly bool, dryRun bool, noPruneCurrent bool) ([]string, error) {
-	var branchesToPrune []string
+// PruneBranches prunes branches matching the given options. It deletes with the
+// safe `git branch -d` by default; opts.Force switches to `-D`. A branch that
+// `-d` refuses because it is not fully merged is recorded in SkippedBranches
+// rather than aborting the whole repository. Branches checked out in a linked
+// worktree are also skipped (git would refuse them anyway).
+//
+// By default the current branch is eligible; if it is a prune candidate the
+// default branch is checked out first. opts.KeepCurrent leaves it alone.
+func (r *Repository) PruneBranches(ctx context.Context, opts PruneOptions) (*PruneResult, error) {
+	result := &PruneResult{Repository: r}
 
 	// Get branch information
 	status, err := r.Status(ctx)
@@ -386,56 +408,94 @@ func (r *Repository) PruneBranches(ctx context.Context, goneOnly, mergedOnly boo
 		return nil, fmt.Errorf("failed to get repository status: %w", err)
 	}
 
-	// Determine which branches to prune (by default allow pruning current branch)
-	branchesToPrune, err = r.identifyBranchesToPrune(ctx, status, goneOnly, mergedOnly, !noPruneCurrent)
+	// Index worktree paths by branch name so we can skip branches that are
+	// checked out elsewhere.
+	worktreeOf := make(map[string]string)
+	for _, b := range status.Branches {
+		if b.WorktreePath != "" {
+			worktreeOf[b.Name] = b.WorktreePath
+		}
+	}
+
+	// Determine which branches to prune.
+	candidates, err := r.identifyBranchesToPrune(ctx, status, opts.GoneOnly, opts.MergedOnly, !opts.KeepCurrent)
 	if err != nil {
 		return nil, err
 	}
 
-	// Actually delete the branches if not a dry run
-	if !dryRun && len(branchesToPrune) > 0 {
-		// Check if we need to checkout a different branch first
-		if !noPruneCurrent {
-			currentBranch := status.CurrentBranch
-			// Check if current branch is in the list to prune
-			currentBranchToPrune := false
-			for _, branch := range branchesToPrune {
-				if branch == currentBranch {
-					currentBranchToPrune = true
-					break
-				}
-			}
+	// Filter out branches checked out in a worktree; those can never be deleted
+	// in place and would produce a confusing git error.
+	var branchesToPrune []string
+	for _, branch := range candidates {
+		if wt, ok := worktreeOf[branch]; ok {
+			result.SkippedBranches = append(result.SkippedBranches, SkippedBranch{
+				Name:   branch,
+				Reason: fmt.Sprintf("checked out in worktree %s", wt),
+			})
+			continue
+		}
+		branchesToPrune = append(branchesToPrune, branch)
+	}
 
-			// If current branch needs to be pruned, checkout default branch first
-			if currentBranchToPrune {
-				defaultBranch, err := r.GetDefaultBranch(ctx)
-				if err != nil {
-					return nil, fmt.Errorf("failed to determine default branch: %w", err)
-				}
+	if opts.DryRun {
+		result.PrunedBranches = branchesToPrune
+		return result, nil
+	}
 
-				// Don't prune the default branch if it's the only branch we have
-				if defaultBranch == currentBranch {
-					return nil, fmt.Errorf("cannot prune current branch '%s' because it is also the default branch", currentBranch)
-				}
+	if len(branchesToPrune) == 0 {
+		return result, nil
+	}
 
-				// Checkout the default branch
-				err = r.Checkout(ctx, defaultBranch)
-				if err != nil {
-					return nil, fmt.Errorf("failed to checkout default branch '%s' before pruning current branch: %w", defaultBranch, err)
-				}
+	// If the current branch is among those to prune, check out the default
+	// branch first so the delete can proceed.
+	if !opts.KeepCurrent {
+		currentBranch := status.CurrentBranch
+		currentBranchToPrune := false
+		for _, branch := range branchesToPrune {
+			if branch == currentBranch {
+				currentBranchToPrune = true
+				break
 			}
 		}
 
-		// Now delete the branches
-		for _, branch := range branchesToPrune {
-			_, err := r.execGitCommand(ctx, false, "branch", "-D", branch)
+		if currentBranchToPrune {
+			defaultBranch, err := r.GetDefaultBranch(ctx)
 			if err != nil {
-				return branchesToPrune, fmt.Errorf("failed to delete branch %s: %w", branch, err)
+				return nil, fmt.Errorf("failed to determine default branch: %w", err)
+			}
+			if defaultBranch == currentBranch {
+				return nil, fmt.Errorf("cannot prune current branch '%s' because it is also the default branch", currentBranch)
+			}
+			if err := r.Checkout(ctx, defaultBranch); err != nil {
+				return nil, fmt.Errorf("failed to checkout default branch '%s' before pruning current branch: %w", defaultBranch, err)
 			}
 		}
 	}
 
-	return branchesToPrune, nil
+	deleteFlag := "-d"
+	if opts.Force {
+		deleteFlag = "-D"
+	}
+
+	for _, branch := range branchesToPrune {
+		out, err := r.execGitCommand(ctx, false, "branch", deleteFlag, branch)
+		if err != nil {
+			// `git branch -d` refuses branches that aren't fully merged. Record
+			// them as skipped and keep going instead of aborting the repo.
+			if !opts.Force && strings.Contains(string(out)+err.Error(), "not fully merged") {
+				result.SkippedBranches = append(result.SkippedBranches, SkippedBranch{
+					Name:   branch,
+					Reason: "not fully merged (use --force)",
+				})
+				continue
+			}
+			result.Error = fmt.Errorf("failed to delete branch %s: %w", branch, err)
+			return result, result.Error
+		}
+		result.PrunedBranches = append(result.PrunedBranches, branch)
+	}
+
+	return result, nil
 }
 
 // GetDefaultBranch returns the repository's default branch. It prefers the

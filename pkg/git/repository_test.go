@@ -563,9 +563,13 @@ func TestUpdate(t *testing.T) {
 }
 
 func TestPruneBranches(t *testing.T) {
-	// Create a repository for testing
-	repo := NewTestRepository()
-	repo.Path = "/tmp" // must be a real path so os.Stat passes in Repository.Status()
+	// newRepo returns a fresh repository so the memoized defaultBranch never
+	// leaks across subtests.
+	newRepo := func() *Repository {
+		repo := NewTestRepository()
+		repo.Path = "/tmp" // must be a real path so os.Stat passes in Repository.Status()
+		return repo.Repository
+	}
 
 	// Test prune branches with gone remotes
 	t.Run("Prune branches with gone remotes", func(t *testing.T) {
@@ -580,36 +584,43 @@ func TestPruneBranches(t *testing.T) {
 						refLine("old-feature", "", "origin/old-feature", "[gone]", "", "")), nil
 				}
 				if len(args) > 0 && args[0] == "branch" {
-					if len(args) > 1 && args[1] == "-D" {
+					if len(args) > 1 && args[1] == "-d" {
 						if args[2] != "old-feature" {
 							t.Errorf("Expected to delete old-feature, got: %v", args[2])
 						}
 						return []byte("Deleted branch " + args[2]), nil
 					}
+					if len(args) > 1 && args[1] == "-D" {
+						t.Errorf("Expected safe delete -d, got -D for %v", args[2])
+					}
 				}
 				if len(args) > 1 && args[0] == "stash" && args[1] == "list" {
 					return []byte(""), nil
+				}
+				if len(args) > 0 && args[0] == "symbolic-ref" {
+					return nil, exitError(1) // no origin/HEAD
 				}
 				if len(args) > 0 && args[0] == "show-ref" {
 					if args[len(args)-1] == "refs/heads/main" {
 						return nil, nil // main branch exists
 					}
-					return nil, errors.New("ref not found")
-				}
-				if len(args) > 0 && args[0] == "rev-parse" {
-					return []byte("main"), nil
+					return nil, exitError(1)
 				}
 				return nil, errors.New("unexpected command")
 			},
 		}
 
-		repo.Repository.SetGitCommandExecutor(mockExecutor)
-		branches, err := repo.Repository.PruneBranches(context.Background(), true, false, false, false)
+		repo := newRepo()
+		repo.SetGitCommandExecutor(mockExecutor)
+		result, err := repo.PruneBranches(context.Background(), PruneOptions{GoneOnly: true})
 		if err != nil {
 			t.Errorf("PruneBranches() error = %v, want nil", err)
 		}
-		if len(branches) != 1 || branches[0] != "old-feature" {
-			t.Errorf("PruneBranches() branches = %v, want [old-feature]", branches)
+		if len(result.PrunedBranches) != 1 || result.PrunedBranches[0] != "old-feature" {
+			t.Errorf("PruneBranches() pruned = %v, want [old-feature]", result.PrunedBranches)
+		}
+		if len(result.SkippedBranches) != 0 {
+			t.Errorf("PruneBranches() skipped = %v, want none", result.SkippedBranches)
 		}
 	})
 
@@ -629,7 +640,7 @@ func TestPruneBranches(t *testing.T) {
 					if len(args) > 1 && args[1] == "--merged" {
 						return []byte("  feature\n  merged-feature"), nil
 					}
-					if len(args) > 1 && args[1] == "-D" {
+					if len(args) > 1 && args[1] == "-d" {
 						if args[2] != "merged-feature" && args[2] != "feature" {
 							t.Errorf("Expected to delete feature or merged-feature, got: %v", args[2])
 						}
@@ -639,26 +650,27 @@ func TestPruneBranches(t *testing.T) {
 				if len(args) > 1 && args[0] == "stash" && args[1] == "list" {
 					return []byte(""), nil
 				}
+				if len(args) > 0 && args[0] == "symbolic-ref" {
+					return nil, exitError(1)
+				}
 				if len(args) > 0 && args[0] == "show-ref" {
 					if args[len(args)-1] == "refs/heads/main" {
 						return nil, nil // main branch exists
 					}
-					return nil, errors.New("ref not found")
-				}
-				if len(args) > 0 && args[0] == "rev-parse" {
-					return []byte("main"), nil
+					return nil, exitError(1)
 				}
 				return nil, errors.New("unexpected command")
 			},
 		}
 
-		repo.Repository.SetGitCommandExecutor(mockExecutor)
-		branches, err := repo.Repository.PruneBranches(context.Background(), false, true, false, false)
+		repo := newRepo()
+		repo.SetGitCommandExecutor(mockExecutor)
+		result, err := repo.PruneBranches(context.Background(), PruneOptions{MergedOnly: true})
 		if err != nil {
 			t.Errorf("PruneBranches() error = %v, want nil", err)
 		}
-		if len(branches) != 2 {
-			t.Errorf("PruneBranches() branches = %v, want [feature merged-feature]", branches)
+		if len(result.PrunedBranches) != 2 {
+			t.Errorf("PruneBranches() pruned = %v, want [feature merged-feature]", result.PrunedBranches)
 		}
 	})
 
@@ -675,7 +687,7 @@ func TestPruneBranches(t *testing.T) {
 						refLine("old-feature", "", "origin/old-feature", "[gone]", "", "")), nil
 				}
 				if len(args) > 0 && args[0] == "branch" {
-					if len(args) > 1 && args[1] == "-D" {
+					if len(args) > 1 && (args[1] == "-d" || args[1] == "-D") {
 						t.Error("Branch deletion should not be called in dry run mode")
 						return nil, errors.New("should not be called")
 					}
@@ -683,26 +695,27 @@ func TestPruneBranches(t *testing.T) {
 				if len(args) > 1 && args[0] == "stash" && args[1] == "list" {
 					return []byte(""), nil
 				}
+				if len(args) > 0 && args[0] == "symbolic-ref" {
+					return nil, exitError(1)
+				}
 				if len(args) > 0 && args[0] == "show-ref" {
 					if args[len(args)-1] == "refs/heads/main" {
 						return nil, nil // main branch exists
 					}
-					return nil, errors.New("ref not found")
-				}
-				if len(args) > 0 && args[0] == "rev-parse" {
-					return []byte("main"), nil
+					return nil, exitError(1)
 				}
 				return nil, errors.New("unexpected command")
 			},
 		}
 
-		repo.Repository.SetGitCommandExecutor(mockExecutor)
-		branches, err := repo.Repository.PruneBranches(context.Background(), true, false, true, false)
+		repo := newRepo()
+		repo.SetGitCommandExecutor(mockExecutor)
+		result, err := repo.PruneBranches(context.Background(), PruneOptions{GoneOnly: true, DryRun: true})
 		if err != nil {
 			t.Errorf("PruneBranches() error = %v, want nil", err)
 		}
-		if len(branches) != 1 || branches[0] != "old-feature" {
-			t.Errorf("PruneBranches() branches = %v, want [old-feature]", branches)
+		if len(result.PrunedBranches) != 1 || result.PrunedBranches[0] != "old-feature" {
+			t.Errorf("PruneBranches() pruned = %v, want [old-feature]", result.PrunedBranches)
 		}
 	})
 
@@ -717,14 +730,15 @@ func TestPruneBranches(t *testing.T) {
 			},
 		}
 
-		repo.Repository.SetGitCommandExecutor(mockExecutor)
-		_, err := repo.Repository.PruneBranches(context.Background(), true, false, false, false)
+		repo := newRepo()
+		repo.SetGitCommandExecutor(mockExecutor)
+		_, err := repo.PruneBranches(context.Background(), PruneOptions{GoneOnly: true})
 		if err == nil {
 			t.Error("PruneBranches() error = nil, want error")
 		}
 	})
 
-	// Test error deleting branch
+	// Test error deleting branch (a non-merge error aborts the repo)
 	t.Run("Error deleting branch", func(t *testing.T) {
 		mockExecutor := &MockGitCommandExecutor{
 			ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
@@ -737,30 +751,190 @@ func TestPruneBranches(t *testing.T) {
 						refLine("old-feature", "", "origin/old-feature", "[gone]", "", "")), nil
 				}
 				if len(args) > 0 && args[0] == "branch" {
-					if len(args) > 1 && args[1] == "-D" {
+					if len(args) > 1 && args[1] == "-d" {
 						return nil, errors.New("failed to delete branch")
 					}
 				}
 				if len(args) > 1 && args[0] == "stash" && args[1] == "list" {
 					return []byte(""), nil
 				}
+				if len(args) > 0 && args[0] == "symbolic-ref" {
+					return nil, exitError(1)
+				}
 				if len(args) > 0 && args[0] == "show-ref" {
 					if args[len(args)-1] == "refs/heads/main" {
 						return nil, nil // main branch exists
 					}
-					return nil, errors.New("ref not found")
-				}
-				if len(args) > 0 && args[0] == "rev-parse" {
-					return []byte("main"), nil
+					return nil, exitError(1)
 				}
 				return nil, errors.New("unexpected command")
 			},
 		}
 
-		repo.Repository.SetGitCommandExecutor(mockExecutor)
-		_, err := repo.Repository.PruneBranches(context.Background(), true, false, false, false)
+		repo := newRepo()
+		repo.SetGitCommandExecutor(mockExecutor)
+		_, err := repo.PruneBranches(context.Background(), PruneOptions{GoneOnly: true})
 		if err == nil {
 			t.Error("PruneBranches() error = nil, want error")
+		}
+	})
+
+	// Test that an unmerged branch is skipped (not deleted) while other
+	// eligible branches still prune successfully.
+	t.Run("Unmerged branch skipped while others prune", func(t *testing.T) {
+		mockExecutor := &MockGitCommandExecutor{
+			ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
+				if len(args) > 0 && args[0] == "status" {
+					return []byte(""), nil
+				}
+				if len(args) > 0 && args[0] == "for-each-ref" {
+					return []byte(refLine("main", "*", "origin/main", "", "", "") + "\n" +
+						refLine("good-branch", "", "origin/good-branch", "[gone]", "", "") + "\n" +
+						refLine("unmerged-branch", "", "origin/unmerged-branch", "[gone]", "", "")), nil
+				}
+				if len(args) > 0 && args[0] == "branch" {
+					if len(args) > 1 && args[1] == "-d" {
+						switch args[2] {
+						case "good-branch":
+							return []byte("Deleted branch good-branch"), nil
+						case "unmerged-branch":
+							return []byte("error: The branch 'unmerged-branch' is not fully merged."),
+								errors.New("exit status 1")
+						}
+					}
+				}
+				if len(args) > 1 && args[0] == "stash" && args[1] == "list" {
+					return []byte(""), nil
+				}
+				if len(args) > 0 && args[0] == "symbolic-ref" {
+					return nil, exitError(1)
+				}
+				if len(args) > 0 && args[0] == "show-ref" {
+					if args[len(args)-1] == "refs/heads/main" {
+						return nil, nil
+					}
+					return nil, exitError(1)
+				}
+				return nil, errors.New("unexpected command")
+			},
+		}
+
+		repo := newRepo()
+		repo.SetGitCommandExecutor(mockExecutor)
+		result, err := repo.PruneBranches(context.Background(), PruneOptions{GoneOnly: true})
+		if err != nil {
+			t.Errorf("PruneBranches() error = %v, want nil", err)
+		}
+		if len(result.PrunedBranches) != 1 || result.PrunedBranches[0] != "good-branch" {
+			t.Errorf("PruneBranches() pruned = %v, want [good-branch]", result.PrunedBranches)
+		}
+		if len(result.SkippedBranches) != 1 || result.SkippedBranches[0].Name != "unmerged-branch" {
+			t.Fatalf("PruneBranches() skipped = %v, want [unmerged-branch]", result.SkippedBranches)
+		}
+		if !strings.Contains(result.SkippedBranches[0].Reason, "not fully merged") {
+			t.Errorf("skip reason = %q, want it to mention 'not fully merged'", result.SkippedBranches[0].Reason)
+		}
+	})
+
+	// Test that --force uses -D and deletes even unmerged branches.
+	t.Run("Force uses -D", func(t *testing.T) {
+		usedForce := false
+		mockExecutor := &MockGitCommandExecutor{
+			ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
+				if len(args) > 0 && args[0] == "status" {
+					return []byte(""), nil
+				}
+				if len(args) > 0 && args[0] == "for-each-ref" {
+					return []byte(refLine("main", "*", "origin/main", "", "", "") + "\n" +
+						refLine("old-feature", "", "origin/old-feature", "[gone]", "", "")), nil
+				}
+				if len(args) > 0 && args[0] == "branch" {
+					if len(args) > 1 && args[1] == "-d" {
+						t.Error("Expected force delete -D, got safe -d")
+						return nil, errors.New("should not be called")
+					}
+					if len(args) > 1 && args[1] == "-D" {
+						usedForce = true
+						return []byte("Deleted branch " + args[2]), nil
+					}
+				}
+				if len(args) > 1 && args[0] == "stash" && args[1] == "list" {
+					return []byte(""), nil
+				}
+				if len(args) > 0 && args[0] == "symbolic-ref" {
+					return nil, exitError(1)
+				}
+				if len(args) > 0 && args[0] == "show-ref" {
+					if args[len(args)-1] == "refs/heads/main" {
+						return nil, nil
+					}
+					return nil, exitError(1)
+				}
+				return nil, errors.New("unexpected command")
+			},
+		}
+
+		repo := newRepo()
+		repo.SetGitCommandExecutor(mockExecutor)
+		result, err := repo.PruneBranches(context.Background(), PruneOptions{GoneOnly: true, Force: true})
+		if err != nil {
+			t.Errorf("PruneBranches() error = %v, want nil", err)
+		}
+		if !usedForce {
+			t.Error("PruneBranches() did not use -D with Force option")
+		}
+		if len(result.PrunedBranches) != 1 || result.PrunedBranches[0] != "old-feature" {
+			t.Errorf("PruneBranches() pruned = %v, want [old-feature]", result.PrunedBranches)
+		}
+	})
+
+	// Test that a branch checked out in a linked worktree is skipped.
+	t.Run("Worktree branch skipped", func(t *testing.T) {
+		mockExecutor := &MockGitCommandExecutor{
+			ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
+				if len(args) > 0 && args[0] == "status" {
+					return []byte(""), nil
+				}
+				if len(args) > 0 && args[0] == "for-each-ref" {
+					return []byte(refLine("main", "*", "origin/main", "", "", "") + "\n" +
+						refLine("wt-feature", "", "origin/wt-feature", "[gone]", "", "/tmp/wt")), nil
+				}
+				if len(args) > 0 && args[0] == "branch" {
+					if len(args) > 1 && (args[1] == "-d" || args[1] == "-D") {
+						t.Errorf("Should not delete worktree branch %v", args[2])
+						return nil, errors.New("should not be called")
+					}
+				}
+				if len(args) > 1 && args[0] == "stash" && args[1] == "list" {
+					return []byte(""), nil
+				}
+				if len(args) > 0 && args[0] == "symbolic-ref" {
+					return nil, exitError(1)
+				}
+				if len(args) > 0 && args[0] == "show-ref" {
+					if args[len(args)-1] == "refs/heads/main" {
+						return nil, nil
+					}
+					return nil, exitError(1)
+				}
+				return nil, errors.New("unexpected command")
+			},
+		}
+
+		repo := newRepo()
+		repo.SetGitCommandExecutor(mockExecutor)
+		result, err := repo.PruneBranches(context.Background(), PruneOptions{GoneOnly: true})
+		if err != nil {
+			t.Errorf("PruneBranches() error = %v, want nil", err)
+		}
+		if len(result.PrunedBranches) != 0 {
+			t.Errorf("PruneBranches() pruned = %v, want none", result.PrunedBranches)
+		}
+		if len(result.SkippedBranches) != 1 || result.SkippedBranches[0].Name != "wt-feature" {
+			t.Fatalf("PruneBranches() skipped = %v, want [wt-feature]", result.SkippedBranches)
+		}
+		if !strings.Contains(result.SkippedBranches[0].Reason, "worktree") {
+			t.Errorf("skip reason = %q, want it to mention 'worktree'", result.SkippedBranches[0].Reason)
 		}
 	})
 }

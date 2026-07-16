@@ -34,12 +34,21 @@ func RenderPruneResults(pruneResults map[string]git.PruneResult, isDryRun bool) 
 
 		if result.Error != nil {
 			ErrorStyle.Printf("❌ Error: %s\n", result.Error)
-		} else if len(result.PrunedBranches) == 0 {
+		} else if len(result.PrunedBranches) == 0 && len(result.SkippedBranches) == 0 {
 			SuccessStyle.Println("✅ No branches to prune")
-		} else {
+		} else if len(result.PrunedBranches) > 0 {
 			SuccessStyle.Printf("✅ Pruned %d branch(es): %s\n",
 				len(result.PrunedBranches),
 				strings.Join(result.PrunedBranches, ", "))
+		}
+
+		if len(result.SkippedBranches) > 0 {
+			skips := make([]string, 0, len(result.SkippedBranches))
+			for _, s := range result.SkippedBranches {
+				skips = append(skips, fmt.Sprintf("%s (%s)", s.Name, s.Reason))
+			}
+			WarnStyle.Printf("⚠️  Skipped %d branch(es): %s\n",
+				len(result.SkippedBranches), strings.Join(skips, ", "))
 		}
 
 		fmt.Println()
