@@ -22,7 +22,16 @@ build:
 	mkdir -p $(BINARY_DIR)
 	$(GOBUILD) -ldflags "$(LDFLAGS)" -o $(BINARY_PATH)
 
-test:
+fmt:
+	gofmt -w .
+
+check-fmt:
+	@test -z "$$(gofmt -l .)" || (echo "The following files are not gofmt-clean:"; gofmt -l .; exit 1)
+
+vet:
+	$(GOCMD) vet ./...
+
+test: check-fmt vet
 	$(GOTEST) -v ./...
 
 clean:
@@ -57,4 +66,4 @@ docker-build:
 release-snapshot:
 	goreleaser release --snapshot --clean
 
-.PHONY: all build test clean run deps build-linux build-windows build-macos build-macos-arm64 docker-build release-snapshot
+.PHONY: all build fmt check-fmt vet test clean run deps build-linux build-windows build-macos build-macos-arm64 docker-build release-snapshot

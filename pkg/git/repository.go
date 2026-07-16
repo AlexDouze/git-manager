@@ -583,15 +583,15 @@ func (r *Repository) identifyBranchesToPrune(status *RepositoryStatus, goneOnly,
 
 // BranchInfo contains information about a git branch
 type BranchInfo struct {
-	Name                string    // Branch name
-	Current             bool      // Whether this is the current branch
-	RemoteTracking      string    // Remote tracking branch (e.g., "origin/main")
-	NoRemoteTracking    bool      // Whether this branch has no remote tracking
-	RemoteGone          bool      // Whether the remote tracking branch is gone
-	Ahead               int       // Number of commits ahead of remote
-	Behind              int       // Number of commits behind remote
-	LastCommitDate      time.Time // Date of the last commit on this branch
-	CommitsBehindDefault int      // Number of commits behind the default branch
+	Name                 string    // Branch name
+	Current              bool      // Whether this is the current branch
+	RemoteTracking       string    // Remote tracking branch (e.g., "origin/main")
+	NoRemoteTracking     bool      // Whether this branch has no remote tracking
+	RemoteGone           bool      // Whether the remote tracking branch is gone
+	Ahead                int       // Number of commits ahead of remote
+	Behind               int       // Number of commits behind remote
+	LastCommitDate       time.Time // Date of the last commit on this branch
+	CommitsBehindDefault int       // Number of commits behind the default branch
 }
 
 // RepositoryStatus contains the status information of a repository

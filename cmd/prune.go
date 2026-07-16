@@ -11,14 +11,14 @@ import (
 )
 
 var (
-	pruneFilters    FilterFlags
-	pruneAllRepos   bool
-	goneOnly        bool
-	mergedOnly      bool
-	execute         bool
-	dryRun          bool // deprecated, kept for backward compatibility
-	keepCurrent     bool
-	noPruneCurrent  bool // deprecated, kept for backward compatibility
+	pruneFilters   FilterFlags
+	pruneAllRepos  bool
+	goneOnly       bool
+	mergedOnly     bool
+	execute        bool
+	dryRun         bool // deprecated, kept for backward compatibility
+	keepCurrent    bool
+	noPruneCurrent bool // deprecated, kept for backward compatibility
 )
 
 var pruneCmd = &cobra.Command{
