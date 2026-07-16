@@ -3,7 +3,9 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 
 	"github.com/alexDouze/gitm/internal/workerpool"
@@ -18,6 +20,7 @@ var (
 	displayAll    bool
 	noFetch       bool
 	olderThan     string
+	statusJSONOut bool
 )
 
 var statusCmd = &cobra.Command{
@@ -39,7 +42,8 @@ branch status, and other important information.`,
 		}
 
 		if len(repositories) == 0 {
-			fmt.Println("No repositories found matching the specified filters.")
+			// Keep stdout clean for JSON consumers; the notice goes to stderr.
+			fmt.Fprintln(cmd.ErrOrStderr(), "No repositories found matching the specified filters.")
 			return nil
 		}
 
@@ -112,6 +116,24 @@ branch status, and other important information.`,
 			}
 		}
 
+		if statusJSONOut {
+			// --json emits every repository (consumers filter on hasIssues) and
+			// keeps stdout clean: status failures become an "error" field.
+			out := make([]statusJSON, 0, len(results))
+			for _, r := range results {
+				if r.status != nil {
+					out = append(out, statusToJSON(r.status))
+					continue
+				}
+				if r.warn != "" {
+					out = append(out, statusJSON{Error: r.warn})
+				}
+			}
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(out)
+		}
+
 		// Render status results
 		for _, r := range results {
 			if r.warn != "" {
@@ -142,4 +164,5 @@ func init() {
 	// Status-specific flags
 	statusCmd.Flags().BoolVar(&noFetch, "no-fetch", false, "Skip fetching from remotes before checking status")
 	statusCmd.Flags().StringVar(&olderThan, "older-than", "30d", "Threshold for stale branch detection (e.g., 30d, 4w, 3m where m=months)")
+	statusCmd.Flags().BoolVar(&statusJSONOut, "json", false, "Output results as JSON (all repositories)")
 }

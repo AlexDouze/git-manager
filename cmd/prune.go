@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/alexDouze/gitm/internal/workerpool"
 	"github.com/alexDouze/gitm/pkg/config"
@@ -21,6 +23,7 @@ var (
 	keepCurrent    bool
 	noPruneCurrent bool // deprecated, kept for backward compatibility
 	forceDelete    bool
+	pruneJSONOut   bool
 )
 
 var pruneCmd = &cobra.Command{
@@ -77,7 +80,8 @@ Examples:
 		}
 
 		if len(repositories) == 0 {
-			fmt.Println("No repositories found matching the criteria.")
+			// Keep stdout clean for JSON consumers; the notice goes to stderr.
+			fmt.Fprintln(cmd.ErrOrStderr(), "No repositories found matching the criteria.")
 			return nil
 		}
 
@@ -94,14 +98,37 @@ Examples:
 			Force:       forceDelete,
 		}
 
-		return pruneRepositories(cmd.Context(), repositories, opts)
+		results := pruneRepositories(cmd.Context(), repositories, opts)
+
+		if pruneJSONOut {
+			// --json keeps stdout clean: per-repo failures become an "error"
+			// field rather than TUI warnings.
+			out := make([]pruneJSON, 0, len(results))
+			for _, r := range results {
+				out = append(out, pruneToJSON(r))
+			}
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(out)
+		}
+
+		pruneResults := make(map[string]git.PruneResult, len(results))
+		for _, r := range results {
+			if r.Repository != nil {
+				pruneResults[r.Repository.Path] = r
+			}
+		}
+		tui.RenderPruneResults(pruneResults, opts.DryRun)
+		return nil
 	},
 }
 
-func pruneRepositories(ctx context.Context, repositories []*git.Repository, opts git.PruneOptions) error {
+// pruneRepositories prunes each repository in parallel and returns the results
+// in the same order as the input slice.
+func pruneRepositories(ctx context.Context, repositories []*git.Repository, opts git.PruneOptions) []git.PruneResult {
 	prog := tui.NewProgress("Pruning branches", len(repositories))
 
-	results := workerpool.Map(ctx, repositories, workerpool.Default(), func(ctx context.Context, repo *git.Repository) git.PruneResult {
+	return workerpool.Map(ctx, repositories, workerpool.Default(), func(ctx context.Context, repo *git.Repository) git.PruneResult {
 		defer prog.Increment()
 
 		// PruneBranches calls Status() itself, so there's no need for a
@@ -115,14 +142,6 @@ func pruneRepositories(ctx context.Context, repositories []*git.Repository, opts
 		}
 		return *result
 	})
-
-	pruneResults := make(map[string]git.PruneResult, len(repositories))
-	for i, repo := range repositories {
-		pruneResults[repo.Path] = results[i]
-	}
-
-	tui.RenderPruneResults(pruneResults, opts.DryRun)
-	return nil
 }
 
 func init() {
@@ -137,6 +156,8 @@ func init() {
 	pruneCmd.Flags().BoolVar(&execute, "execute", false, "Actually delete branches (default is dry-run)")
 
 	pruneCmd.Flags().BoolVar(&forceDelete, "force", false, "Force-delete branches that are not fully merged (git branch -D)")
+
+	pruneCmd.Flags().BoolVar(&pruneJSONOut, "json", false, "Output results as JSON")
 
 	// Deprecated flag kept for backward compatibility
 	pruneCmd.Flags().BoolVar(&dryRun, "dry-run", true, "Show branches that would be pruned without actually pruning them")
