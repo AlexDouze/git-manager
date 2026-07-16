@@ -59,6 +59,11 @@ type Repository struct {
 	Name         string             // Repository name
 	Path         string             // Local filesystem path
 	gitExecutor  GitCommandExecutor // Git command executor
+
+	// defaultBranch memoizes GetDefaultBranch. Not synchronized: each repository
+	// is processed by a single goroutine across all callers (the worker pool
+	// gives one repo to one worker), so no concurrent access occurs.
+	defaultBranch string
 }
 
 // NewRepository creates a new Repository with default GitCommandExecutor
@@ -144,9 +149,10 @@ func (r *Repository) Clone(ctx context.Context, rootDir, url string, options []s
 		return fmt.Errorf("failed to check repository path: %w", err)
 	}
 
-	// Prepare git clone command
+	// Prepare git clone command. The "--" guards against a URL that begins with
+	// "-" being interpreted as a git option.
 	args := append([]string{"clone"}, options...)
-	args = append(args, url, r.Path)
+	args = append(args, "--", url, r.Path)
 
 	_, err := r.execGitCommand(ctx, true, args...)
 	return err
@@ -340,6 +346,10 @@ func (r *Repository) Update(ctx context.Context, fetchOnly, prune bool) (*Update
 
 				if err != nil {
 					hasError = true
+					// A failed rebase leaves the repo mid-rebase; abort it so the
+					// subsequent branch checkouts and the final restore don't fail
+					// with "you have unmerged paths". Ignore the abort's own error.
+					_, _ = r.execGitCommand(ctx, false, "rebase", "--abort")
 				}
 			}
 		}
@@ -428,11 +438,28 @@ func (r *Repository) PruneBranches(ctx context.Context, goneOnly, mergedOnly boo
 	return branchesToPrune, nil
 }
 
-// GetDefaultBranch returns the default branch name (main or master)
+// GetDefaultBranch returns the repository's default branch. It prefers the
+// remote HEAD (origin/HEAD), falls back to the main/master heuristic, and
+// finally to the current branch. The result is memoized on the Repository.
 func (r *Repository) GetDefaultBranch(ctx context.Context) (string, error) {
-	// First check if main branch exists
+	if r.defaultBranch != "" {
+		return r.defaultBranch, nil
+	}
+
+	// Prefer the remote's advertised default: origin/HEAD -> origin/<branch>.
+	// Strip the "origin/" prefix to get the local branch name.
+	if out, err := r.execGitCommand(ctx, false, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
+		ref := strings.TrimSpace(string(out))
+		if name := strings.TrimPrefix(ref, "origin/"); name != "" {
+			r.defaultBranch = name
+			return name, nil
+		}
+	}
+
+	// Fall back to checking for main, then master.
 	_, err := r.execGitCommand(ctx, false, "show-ref", "--verify", "--quiet", "refs/heads/main")
 	if err == nil {
+		r.defaultBranch = "main"
 		return "main", nil
 	}
 	var exitErr *exec.ExitError
@@ -440,17 +467,22 @@ func (r *Repository) GetDefaultBranch(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("failed to check for main branch: %w", err)
 	}
 
-	// Then check if master branch exists
 	_, err = r.execGitCommand(ctx, false, "show-ref", "--verify", "--quiet", "refs/heads/master")
 	if err == nil {
+		r.defaultBranch = "master"
 		return "master", nil
 	}
 	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
 		return "", fmt.Errorf("failed to check for master branch: %w", err)
 	}
 
-	// If neither exists, return the current branch as a fallback
-	return r.GetCurrentBranch(ctx)
+	// If neither exists, return the current branch as a fallback.
+	current, err := r.GetCurrentBranch(ctx)
+	if err != nil {
+		return "", err
+	}
+	r.defaultBranch = current
+	return current, nil
 }
 
 // MarkStaleBranches marks branches as stale based on the given threshold.
@@ -715,11 +747,13 @@ func FilterRepositories(repositories []*Repository, host, org, repo string) []*R
 	return filtered
 }
 
-// IsGitRepo checks if a directory is a git repository
+// IsGitRepo reports whether path is a git repository. It accepts .git as a
+// directory (normal repo) or a file (linked worktrees and submodules store a
+// "gitdir:" pointer file there).
 func IsGitRepo(path string) bool {
 	gitDir := filepath.Join(path, ".git")
-	info, err := os.Stat(gitDir)
-	return err == nil && info.IsDir()
+	_, err := os.Stat(gitDir)
+	return err == nil
 }
 
 // CreateRepositoryFromPath creates a Repository object from a path
@@ -777,12 +811,12 @@ func FindRepositories(rootDir, host, org, repo, path string) ([]*Repository, err
 			repositories = append(repositories, repository)
 		} else {
 			// Check if path contains git repositories
-			err := filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
+			err := filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
 				if err != nil {
 					return err
 				}
 
-				if info.IsDir() && IsGitRepo(p) {
+				if d.IsDir() && IsGitRepo(p) {
 					repository, err := CreateRepositoryFromPath(p)
 					if err != nil {
 						return err
@@ -803,12 +837,12 @@ func FindRepositories(rootDir, host, org, repo, path string) ([]*Repository, err
 	}
 
 	// Always walk through the rootDir from config
-	err := filepath.Walk(rootDir, func(p string, info os.FileInfo, err error) error {
+	err := filepath.WalkDir(rootDir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if info.IsDir() && IsGitRepo(p) {
+		if d.IsDir() && IsGitRepo(p) {
 			repository, err := CreateRepositoryFromPath(p)
 			if err != nil {
 				return err

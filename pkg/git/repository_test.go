@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -278,6 +280,20 @@ func TestClone(t *testing.T) {
 				if len(args) < 2 || args[0] != "clone" {
 					t.Errorf("Expected clone command, got: %v", args)
 				}
+				// "--" must appear immediately before the URL so a URL starting
+				// with "-" can't be read as a git flag.
+				var dashIdx, urlIdx = -1, -1
+				for i, a := range args {
+					if a == "--" {
+						dashIdx = i
+					}
+					if a == "git@github.com:octocat/hello-world.git" {
+						urlIdx = i
+					}
+				}
+				if dashIdx == -1 || urlIdx != dashIdx+1 {
+					t.Errorf("Expected '--' immediately before the URL, got: %v", args)
+				}
 				return []byte("Cloning into 'hello-world'..."), nil
 			},
 		}
@@ -326,6 +342,35 @@ func TestClone(t *testing.T) {
 		err := repo.Clone(context.Background(), "/tmp", "git@github.com:octocat/hello-world.git", []string{})
 		if err == nil {
 			t.Error("Clone() error = nil, want error")
+		}
+	})
+}
+
+func TestIsGitRepo(t *testing.T) {
+	t.Run("directory .git (normal repo)", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if !IsGitRepo(dir) {
+			t.Error("IsGitRepo() = false, want true for a .git directory")
+		}
+	})
+
+	t.Run("file .git (linked worktree / submodule)", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: /somewhere/.git/worktrees/wt\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !IsGitRepo(dir) {
+			t.Error("IsGitRepo() = false, want true for a .git file")
+		}
+	})
+
+	t.Run("no .git", func(t *testing.T) {
+		dir := t.TempDir()
+		if IsGitRepo(dir) {
+			t.Error("IsGitRepo() = true, want false when .git is absent")
 		}
 	})
 }
@@ -826,12 +871,40 @@ func TestCheckout(t *testing.T) {
 }
 
 func TestGetDefaultBranch(t *testing.T) {
-	repo := NewTestRepository()
-	repo.Path = "/mock/path"
+	// A fresh repo per subtest — GetDefaultBranch memoizes, so state must not
+	// leak between cases.
+	newRepo := func() *TestRepository {
+		r := NewTestRepository()
+		r.Path = "/mock/path"
+		return r
+	}
 
-	t.Run("main exists", func(t *testing.T) {
+	t.Run("origin/HEAD via symbolic-ref", func(t *testing.T) {
+		repo := newRepo()
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
 			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
+				if args[0] == "symbolic-ref" {
+					return []byte("origin/develop\n"), nil
+				}
+				return nil, errors.New("unexpected")
+			},
+		})
+		branch, err := repo.Repository.GetDefaultBranch(context.Background())
+		if err != nil {
+			t.Fatalf("GetDefaultBranch() error = %v, want nil", err)
+		}
+		if branch != "develop" {
+			t.Errorf("GetDefaultBranch() = %q, want %q", branch, "develop")
+		}
+	})
+
+	t.Run("main exists (symbolic-ref miss)", func(t *testing.T) {
+		repo := newRepo()
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
+				if args[0] == "symbolic-ref" {
+					return nil, exitError(1) // no origin/HEAD
+				}
 				if args[0] == "show-ref" && args[len(args)-1] == "refs/heads/main" {
 					return nil, nil // main exists
 				}
@@ -848,8 +921,12 @@ func TestGetDefaultBranch(t *testing.T) {
 	})
 
 	t.Run("master fallback", func(t *testing.T) {
+		repo := newRepo()
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
 			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
+				if args[0] == "symbolic-ref" {
+					return nil, exitError(1)
+				}
 				if args[0] == "show-ref" {
 					if args[len(args)-1] == "refs/heads/main" {
 						return nil, exitError(1) // main absent
@@ -871,8 +948,12 @@ func TestGetDefaultBranch(t *testing.T) {
 	})
 
 	t.Run("fallback to current branch", func(t *testing.T) {
+		repo := newRepo()
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
 			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
+				if args[0] == "symbolic-ref" {
+					return nil, exitError(1)
+				}
 				if args[0] == "show-ref" {
 					return nil, exitError(1) // neither main nor master
 				}
@@ -892,8 +973,12 @@ func TestGetDefaultBranch(t *testing.T) {
 	})
 
 	t.Run("real error on main check", func(t *testing.T) {
+		repo := newRepo()
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
 			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
+				if args[0] == "symbolic-ref" {
+					return nil, exitError(1)
+				}
 				return nil, errors.New("network error")
 			},
 		})
@@ -904,8 +989,12 @@ func TestGetDefaultBranch(t *testing.T) {
 	})
 
 	t.Run("real error on master check", func(t *testing.T) {
+		repo := newRepo()
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
 			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
+				if args[0] == "symbolic-ref" {
+					return nil, exitError(1)
+				}
 				if args[0] == "show-ref" && args[len(args)-1] == "refs/heads/main" {
 					return nil, exitError(1)
 				}
@@ -917,11 +1006,41 @@ func TestGetDefaultBranch(t *testing.T) {
 			t.Error("GetDefaultBranch() error = nil, want error")
 		}
 	})
+
+	t.Run("memoizes result across calls", func(t *testing.T) {
+		repo := newRepo()
+		var symbolicRefCalls int
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
+				if args[0] == "symbolic-ref" {
+					symbolicRefCalls++
+					return []byte("origin/main\n"), nil
+				}
+				return nil, errors.New("unexpected")
+			},
+		})
+		for i := 0; i < 3; i++ {
+			branch, err := repo.Repository.GetDefaultBranch(context.Background())
+			if err != nil {
+				t.Fatalf("GetDefaultBranch() error = %v, want nil", err)
+			}
+			if branch != "main" {
+				t.Errorf("GetDefaultBranch() = %q, want %q", branch, "main")
+			}
+		}
+		if symbolicRefCalls != 1 {
+			t.Errorf("symbolic-ref invoked %d times, want 1 (memoized)", symbolicRefCalls)
+		}
+	})
 }
 
 func TestMarkStaleBranches(t *testing.T) {
-	repo := NewTestRepository()
-	repo.Path = "/mock/path"
+	// Fresh repo per subtest — GetDefaultBranch memoizes on the Repository.
+	newRepo := func() *TestRepository {
+		r := NewTestRepository()
+		r.Path = "/mock/path"
+		return r
+	}
 
 	now := time.Now()
 	old := now.Add(-60 * 24 * time.Hour)
@@ -932,8 +1051,12 @@ func TestMarkStaleBranches(t *testing.T) {
 	// branches (ListBranches supplies it via Status); it only calls
 	// GetDefaultBranch (show-ref) and rev-list for the behind count.
 	t.Run("marks old branch stale, skips default branch", func(t *testing.T) {
+		repo := newRepo()
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
 			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
+				if args[0] == "symbolic-ref" {
+					return nil, exitError(1) // no origin/HEAD; fall back to main
+				}
 				if args[0] == "show-ref" && args[len(args)-1] == "refs/heads/main" {
 					return nil, nil
 				}
@@ -981,8 +1104,11 @@ func TestMarkStaleBranches(t *testing.T) {
 	})
 
 	t.Run("GetDefaultBranch error propagates", func(t *testing.T) {
+		repo := newRepo()
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
 			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
+				// symbolic-ref failure is a soft miss; a non-exit-1 error on the
+				// show-ref fallback is what propagates out of GetDefaultBranch.
 				return nil, errors.New("git error")
 			},
 		})

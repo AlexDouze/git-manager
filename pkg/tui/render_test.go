@@ -43,6 +43,9 @@ func TestGetStaleBranchesDisplay(t *testing.T) {
 	recent := now.Add(-5 * 24 * time.Hour)
 	threshold := 30 * 24 * time.Hour
 
+	// getStaleBranchesDisplay now filters on the Stale flag set by
+	// MarkStaleBranches (which excludes the default branch), rather than
+	// re-deriving staleness from commit dates.
 	tests := []struct {
 		name     string
 		branches []git.BranchInfo
@@ -52,26 +55,26 @@ func TestGetStaleBranchesDisplay(t *testing.T) {
 		{
 			name: "stale branch with remote gone",
 			branches: []git.BranchInfo{
-				{Name: "old-feature", LastCommitDate: old, RemoteGone: true, CommitsBehindDefault: 5},
+				{Name: "old-feature", LastCommitDate: old, Stale: true, RemoteGone: true, CommitsBehindDefault: 5},
 			},
 			contains: []string{"old-feature", "remote gone", "5 behind"},
 		},
 		{
 			name: "stale branch with no remote",
 			branches: []git.BranchInfo{
-				{Name: "local", LastCommitDate: old, NoRemoteTracking: true, CommitsBehindDefault: 2},
+				{Name: "local", LastCommitDate: old, Stale: true, NoRemoteTracking: true, CommitsBehindDefault: 2},
 			},
 			contains: []string{"local", "no remote", "2 behind"},
 		},
 		{
 			name: "stale branch with remote tracking",
 			branches: []git.BranchInfo{
-				{Name: "tracked", LastCommitDate: old, RemoteTracking: "origin/tracked", CommitsBehindDefault: 1},
+				{Name: "tracked", LastCommitDate: old, Stale: true, RemoteTracking: "origin/tracked", CommitsBehindDefault: 1},
 			},
 			contains: []string{"tracked", "has remote", "1 behind"},
 		},
 		{
-			name: "recent branch not included",
+			name: "recent branch not marked stale is excluded",
 			branches: []git.BranchInfo{
 				{Name: "fresh", LastCommitDate: recent},
 			},
@@ -79,17 +82,17 @@ func TestGetStaleBranchesDisplay(t *testing.T) {
 			excludes: []string{"fresh"},
 		},
 		{
-			name: "branch with zero date not included",
+			name: "old but unmarked branch (e.g. default) is excluded",
 			branches: []git.BranchInfo{
-				{Name: "no-date"},
+				{Name: "main", LastCommitDate: old},
 			},
 			contains: []string{},
-			excludes: []string{"no-date"},
+			excludes: []string{"main"},
 		},
 		{
 			name: "current branch marked with asterisk",
 			branches: []git.BranchInfo{
-				{Name: "stale-current", LastCommitDate: old, Current: true, CommitsBehindDefault: 3},
+				{Name: "stale-current", LastCommitDate: old, Stale: true, Current: true, CommitsBehindDefault: 3},
 			},
 			contains: []string{"*stale-current"},
 		},
