@@ -2,10 +2,11 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"sort"
-	"sync"
 
+	"github.com/alexDouze/gitm/internal/workerpool"
 	"github.com/alexDouze/gitm/pkg/config"
 	"github.com/alexDouze/gitm/pkg/git"
 	"github.com/alexDouze/gitm/pkg/tui"
@@ -48,10 +49,6 @@ branch status, and other important information.`,
 			return fmt.Errorf("invalid --older-than value %q: %w", olderThan, err)
 		}
 
-		// Create a wait group to wait for all goroutines to complete
-		var wg sync.WaitGroup
-		wg.Add(len(repositories))
-
 		// Process repositories in parallel, collecting results
 		type repoStatus struct {
 			status    *git.RepositoryStatus
@@ -59,59 +56,49 @@ branch status, and other important information.`,
 			fetchWarn string
 			sortKey   string
 		}
-		results := make([]repoStatus, 0, len(repositories))
-		var mu sync.Mutex
 
 		prog := tui.NewProgress("Scanning repositories", len(repositories))
 
 		// Limit concurrent SSH signing operations to avoid overwhelming the SSH agent
 		// (especially hardware keys like YubiKey that handle signing sequentially).
+		// The worker pool bounds total parallelism; this semaphore bounds the
+		// number of concurrent fetches within it.
 		fetchSem := make(chan struct{}, 4)
 
 		ctx := cmd.Context()
 
-		for _, repo := range repositories {
-			go func(r *git.Repository) {
-				defer wg.Done()
-				defer prog.Increment()
+		results := workerpool.Map(ctx, repositories, workerpool.Default(), func(ctx context.Context, r *git.Repository) repoStatus {
+			defer prog.Increment()
 
-				sortKey := fmt.Sprintf("%s/%s/%s", r.Host, r.Organization, r.Name)
+			sortKey := fmt.Sprintf("%s/%s/%s", r.Host, r.Organization, r.Name)
 
-				var fetchWarn string
-				if !noFetch {
-					fetchSem <- struct{}{}
-					_, fetchErr := r.Update(ctx, true, false)
-					<-fetchSem
-					if fetchErr != nil {
-						fetchWarn = fmt.Sprintf("Warning: failed to fetch %s: %v", r.Path, fetchErr)
-					}
+			var fetchWarn string
+			if !noFetch {
+				fetchSem <- struct{}{}
+				_, fetchErr := r.Update(ctx, true, false)
+				<-fetchSem
+				if fetchErr != nil {
+					fetchWarn = fmt.Sprintf("Warning: failed to fetch %s: %v", r.Path, fetchErr)
 				}
+			}
 
-				// Get repository status
-				status, statusErr := r.Status(ctx)
-				if statusErr != nil {
-					mu.Lock()
-					results = append(results, repoStatus{
-						warn:      fmt.Sprintf("Warning: failed to get status for %s: %v", r.Path, statusErr),
-						fetchWarn: fetchWarn,
-						sortKey:   sortKey,
-					})
-					mu.Unlock()
-					return
+			// Get repository status
+			status, statusErr := r.Status(ctx)
+			if statusErr != nil {
+				return repoStatus{
+					warn:      fmt.Sprintf("Warning: failed to get status for %s: %v", r.Path, statusErr),
+					fetchWarn: fetchWarn,
+					sortKey:   sortKey,
 				}
+			}
 
-				// Mark stale branches
-				if markErr := r.MarkStaleBranches(ctx, status, threshold); markErr != nil {
-					fetchWarn += fmt.Sprintf("\nWarning: failed to check stale branches for %s: %v", r.Path, markErr)
-				}
+			// Mark stale branches
+			if markErr := r.MarkStaleBranches(ctx, status, threshold); markErr != nil {
+				fetchWarn += fmt.Sprintf("\nWarning: failed to check stale branches for %s: %v", r.Path, markErr)
+			}
 
-				mu.Lock()
-				results = append(results, repoStatus{status: status, fetchWarn: fetchWarn, sortKey: sortKey})
-				mu.Unlock()
-			}(repo)
-		}
-
-		wg.Wait()
+			return repoStatus{status: status, fetchWarn: fetchWarn, sortKey: sortKey}
+		})
 
 		// Sort results deterministically by host/org/name
 		sort.Slice(results, func(i, j int) bool {

@@ -3,8 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"sync"
 
+	"github.com/alexDouze/gitm/internal/workerpool"
 	"github.com/alexDouze/gitm/pkg/config"
 	"github.com/alexDouze/gitm/pkg/git"
 	"github.com/alexDouze/gitm/pkg/tui"
@@ -99,35 +99,27 @@ Examples:
 }
 
 func pruneRepositories(ctx context.Context, repositories []*git.Repository, opts git.PruneOptions) error {
-	pruneResults := make(map[string]git.PruneResult)
-	var mutex sync.Mutex
-	var wg sync.WaitGroup
-
 	prog := tui.NewProgress("Pruning branches", len(repositories))
 
-	for _, repo := range repositories {
-		wg.Add(1)
-		go func(repo *git.Repository) {
-			defer wg.Done()
-			defer prog.Increment()
+	results := workerpool.Map(ctx, repositories, workerpool.Default(), func(ctx context.Context, repo *git.Repository) git.PruneResult {
+		defer prog.Increment()
 
-			// PruneBranches calls Status() itself, so there's no need for a
-			// separate status probe here.
-			result, err := repo.PruneBranches(ctx, opts)
-			if result == nil {
-				result = &git.PruneResult{Repository: repo}
-			}
-			if err != nil {
-				result.Error = fmt.Errorf("failed to prune branches: %w", err)
-			}
+		// PruneBranches calls Status() itself, so there's no need for a
+		// separate status probe here.
+		result, err := repo.PruneBranches(ctx, opts)
+		if result == nil {
+			result = &git.PruneResult{Repository: repo}
+		}
+		if err != nil {
+			result.Error = fmt.Errorf("failed to prune branches: %w", err)
+		}
+		return *result
+	})
 
-			mutex.Lock()
-			pruneResults[repo.Path] = *result
-			mutex.Unlock()
-		}(repo)
+	pruneResults := make(map[string]git.PruneResult, len(repositories))
+	for i, repo := range repositories {
+		pruneResults[repo.Path] = results[i]
 	}
-
-	wg.Wait()
 
 	tui.RenderPruneResults(pruneResults, opts.DryRun)
 	return nil

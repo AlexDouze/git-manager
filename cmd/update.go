@@ -2,8 +2,10 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/alexDouze/gitm/internal/workerpool"
 	"github.com/alexDouze/gitm/pkg/config"
 	"github.com/alexDouze/gitm/pkg/git"
 	"github.com/alexDouze/gitm/pkg/tui"
@@ -43,15 +45,19 @@ Can also prune remote-tracking branches that no longer exist on the remote.`,
 			err          error
 		}
 
-		results := make([]result, 0, len(repositories))
 		prog := tui.NewProgress("Updating repositories", len(repositories))
 
 		ctx := cmd.Context()
-		for _, repo := range repositories {
+
+		// Each Update performs a fetch (and checkouts when pulling), so keep the
+		// worker count low to avoid overwhelming the SSH agent and remote server.
+		workers := min(workerpool.Default(), 4)
+
+		results := workerpool.Map(ctx, repositories, workers, func(ctx context.Context, repo *git.Repository) result {
+			defer prog.Increment()
 			ur, err := repo.Update(ctx, fetchOnly, prune)
-			prog.Increment()
-			results = append(results, result{repo: repo, updateResult: ur, err: err})
-		}
+			return result{repo: repo, updateResult: ur, err: err}
+		})
 
 		for _, r := range results {
 			if r.err != nil {
