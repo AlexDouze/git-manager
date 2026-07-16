@@ -131,8 +131,13 @@ responsive.
 | `r` | Refresh statuses (local re-read, no fetch) |
 | `u` | Update the selected repo (fetch + rebase pull) |
 | `p` | Prune the selected repo's gone branches (asks to confirm) |
+| `U` | Update **all** repos at once (fetch + rebase pull) |
+| `P` | Prune **all** repos' gone branches at once (asks to confirm) |
 | `c` | Open the GitHub clone browser |
 | `q` / `ctrl+c` | Quit |
+
+A repo actively being updated or pruned shows a "updating…"/"pruning…" indicator
+in place of its status badges until the action completes.
 
 **Branch view** (after `enter`)
 

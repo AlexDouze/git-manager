@@ -20,6 +20,7 @@
 - Slow git operations NEVER run inside `Update` — each is a `tea.Cmd` closure in `commands.go` that returns a result `Msg` (see `messages.go`); `Update` only mutates model state and returns commands
 - Charm imports use the canonical `charm.land/...` module paths, not `github.com/charmbracelet/...` (the one exception is `github.com/charmbracelet/colorprofile`, which has no `charm.land` alias)
 - Bubble Tea v2 reports the space key as `"space"` (not `" "`) — bind it accordingly in `key.NewBinding`
+- On the repo-list screen, capital `U`/`P` are bulk variants of `u`/`p` (update/prune every repo via `workerpool.Map`, one aggregate `bulkOpDoneMsg`); a repo with an action in flight shows a busy label (e.g. "updating…") on its row in place of status badges
 
 ### Naming Conventions
 - Use CamelCase for exported functions/types (public)

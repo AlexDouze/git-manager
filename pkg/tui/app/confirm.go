@@ -9,9 +9,17 @@ import (
 // decision before a destructive action runs. When present on the Model it takes
 // priority over the active screen's keymap. onConfirm is the command to run when
 // the user accepts (y); pressing n/esc dismisses it without running anything.
+//
+// onAccept, if set, runs synchronously against the model when the user presses
+// y, before onConfirm is dispatched. It exists so accepting a confirm can mark
+// state immediately (e.g. flip affected rows to "pruning…" and set a busy
+// guard) rather than waiting for the async command's result. Its returned
+// command (if any — e.g. from list.Model.SetItem while filtering) is batched
+// alongside onConfirm.
 type confirmState struct {
 	prompt    string
 	onConfirm tea.Cmd
+	onAccept  func(*Model) tea.Cmd
 }
 
 // confirmView renders the prompt centered over the given area as a bordered box.

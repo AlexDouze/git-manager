@@ -128,6 +128,48 @@ func pruneGoneCmd(ctx context.Context, r *git.Repository) tea.Cmd {
 	}
 }
 
+// updateAllCmd fetches and pulls (rebase) every given repository in parallel,
+// mirroring the `gitm update --all` action from the repo-list screen.
+func updateAllCmd(ctx context.Context, repos []*git.Repository) tea.Cmd {
+	return func() tea.Msg {
+		results := workerpool.Map(ctx, repos, workerpool.Default(), func(ctx context.Context, r *git.Repository) bulkResult {
+			_, err := r.Update(ctx, false, false)
+			return bulkResult{path: r.Path, err: err}
+		})
+		return bulkOpDoneMsg{kind: opUpdate, results: results, summary: summarizeBulk("updated", results)}
+	}
+}
+
+// pruneAllCmd prunes gone branches across every given repository in parallel,
+// using the same safe delete as pruneGoneCmd for each one.
+func pruneAllCmd(ctx context.Context, repos []*git.Repository) tea.Cmd {
+	return func() tea.Msg {
+		results := workerpool.Map(ctx, repos, workerpool.Default(), func(ctx context.Context, r *git.Repository) bulkResult {
+			_, err := r.PruneBranches(ctx, git.PruneOptions{GoneOnly: true})
+			return bulkResult{path: r.Path, err: err}
+		})
+		return bulkOpDoneMsg{kind: opDeleteBranch, results: results, summary: summarizeBulk("pruned", results)}
+	}
+}
+
+// summarizeBulk turns a slice of per-repo results into a short footer summary,
+// e.g. "updated 10/12 repositories (2 failed)".
+func summarizeBulk(verb string, results []bulkResult) string {
+	failed := 0
+	for _, r := range results {
+		if r.err != nil {
+			failed++
+		}
+	}
+	total := len(results)
+	ok := total - failed
+	summary := fmt.Sprintf("%s %d/%d repositories", verb, ok, total)
+	if failed > 0 {
+		summary += fmt.Sprintf(" (%d failed)", failed)
+	}
+	return summary
+}
+
 // loadGitHubReposCmd lists an owner's repositories via `gh` for the clone
 // browser. An empty owner lists the authenticated user's repos.
 func loadGitHubReposCmd(ctx context.Context, owner string, limit int) tea.Cmd {

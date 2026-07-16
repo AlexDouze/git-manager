@@ -12,6 +12,7 @@ type styles struct {
 	ok        lipgloss.Style // clean / success badge
 	warn      lipgloss.Style // stale / no-remote badge
 	err       lipgloss.Style // behind / gone / dirty badge
+	busy      lipgloss.Style // an action is actively running against this row
 	footer    lipgloss.Style // footer status line
 	footerErr lipgloss.Style // footer error line
 }
@@ -24,6 +25,7 @@ func newStyles() styles {
 		ok:        lipgloss.NewStyle().Foreground(lipgloss.Color("42")),
 		warn:      lipgloss.NewStyle().Foreground(lipgloss.Color("214")),
 		err:       lipgloss.NewStyle().Foreground(lipgloss.Color("196")),
+		busy:      lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
 		footer:    lipgloss.NewStyle().Foreground(lipgloss.Color("42")),
 		footerErr: lipgloss.NewStyle().Foreground(lipgloss.Color("196")),
 	}

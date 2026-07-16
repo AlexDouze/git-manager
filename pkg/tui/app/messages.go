@@ -60,6 +60,22 @@ type opDoneMsg struct {
 	notFullyMerged bool
 }
 
+// bulkResult pairs a repository (by path) with the outcome of a bulk action
+// (update-all/prune-all) run against it.
+type bulkResult struct {
+	path string
+	err  error
+}
+
+// bulkOpDoneMsg reports the completion of an all-repos action (update-all,
+// prune-all). summary is precomputed for the footer (e.g. "updated 10/12 (2
+// failed)") since the aggregate wording depends on the op kind.
+type bulkOpDoneMsg struct {
+	kind    opKind
+	results []bulkResult
+	summary string
+}
+
 // ghReposLoadedMsg carries the result of loadGitHubReposCmd: the repositories
 // listed for an owner via `gh`, or the error that stopped the listing.
 type ghReposLoadedMsg struct {
