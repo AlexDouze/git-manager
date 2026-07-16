@@ -110,11 +110,13 @@ func deleteBranchCmd(ctx context.Context, r *git.Repository, branch string, forc
 	}
 }
 
-// pruneGoneCmd prunes the given repository's branches whose upstream is gone,
-// using the safe delete (unmerged branches are reported as skipped, not forced).
+// pruneGoneCmd prunes the given repository's branches whose upstream is gone. A
+// gone upstream is treated as intent to delete, so this force-deletes (`-D`)
+// even branches with unmerged local commits; only branches checked out in a
+// worktree are still reported as skipped.
 func pruneGoneCmd(ctx context.Context, r *git.Repository) tea.Cmd {
 	return func() tea.Msg {
-		result, err := r.PruneBranches(ctx, git.PruneOptions{GoneOnly: true})
+		result, err := r.PruneBranches(ctx, git.PruneOptions{GoneOnly: true, Force: true})
 		msg := opDoneMsg{kind: opDeleteBranch, path: r.Path, err: err}
 		switch {
 		case err != nil:
@@ -141,11 +143,11 @@ func updateAllCmd(ctx context.Context, repos []*git.Repository) tea.Cmd {
 }
 
 // pruneAllCmd prunes gone branches across every given repository in parallel,
-// using the same safe delete as pruneGoneCmd for each one.
+// using the same force delete as pruneGoneCmd for each one.
 func pruneAllCmd(ctx context.Context, repos []*git.Repository) tea.Cmd {
 	return func() tea.Msg {
 		results := workerpool.Map(ctx, repos, workerpool.Default(), func(ctx context.Context, r *git.Repository) bulkResult {
-			_, err := r.PruneBranches(ctx, git.PruneOptions{GoneOnly: true})
+			_, err := r.PruneBranches(ctx, git.PruneOptions{GoneOnly: true, Force: true})
 			return bulkResult{path: r.Path, err: err}
 		})
 		return bulkOpDoneMsg{kind: opDeleteBranch, results: results, summary: summarizeBulk("pruned", results)}
