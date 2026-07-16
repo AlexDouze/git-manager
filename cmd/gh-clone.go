@@ -56,7 +56,7 @@ Examples:
 		}
 
 		// List repositories using GitHub CLI
-		repos, err := git.ListGitHubRepositories(ghCloneOwner)
+		repos, err := git.ListGitHubRepositories(cmd.Context(), ghCloneOwner)
 		if err != nil {
 			return fmt.Errorf("failed to list repositories: %w", err)
 		}
@@ -77,7 +77,7 @@ Examples:
 
 		for _, repo := range selectedRepos {
 			url := fmt.Sprintf("git@%s:%s/%s.git", repo.Host, repo.Organization, repo.Name)
-			if err = repo.Clone(targetDir, url, cloneOptions); err != nil {
+			if err = repo.Clone(cmd.Context(), targetDir, url, cloneOptions); err != nil {
 				fmt.Printf("❌ Error cloning repository %s: %s\n", repo.Name, err)
 			} else {
 				fmt.Printf("✅ Repository %s cloned successfully in %s\n", repo.Name, repo.Path)

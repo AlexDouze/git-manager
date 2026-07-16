@@ -46,8 +46,9 @@ Can also prune remote-tracking branches that no longer exist on the remote.`,
 		results := make([]result, 0, len(repositories))
 		prog := tui.NewProgress("Updating repositories", len(repositories))
 
+		ctx := cmd.Context()
 		for _, repo := range repositories {
-			ur, err := repo.Update(fetchOnly, prune)
+			ur, err := repo.Update(ctx, fetchOnly, prune)
 			prog.Increment()
 			results = append(results, result{repo: repo, updateResult: ur, err: err})
 		}

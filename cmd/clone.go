@@ -49,7 +49,7 @@ The repository will be cloned into <root-directory>/<host>/<organization>/<repos
 		fmt.Printf("Cloning %s to %s/%s/%s/%s\n",
 			url, targetDir, repo.Host, repo.Organization, repo.Name)
 
-		if err = repo.Clone(targetDir, url, cloneOptions); err != nil {
+		if err = repo.Clone(cmd.Context(), targetDir, url, cloneOptions); err != nil {
 			return fmt.Errorf("failed to clone repository: %w", err)
 		}
 

@@ -68,6 +68,8 @@ branch status, and other important information.`,
 		// (especially hardware keys like YubiKey that handle signing sequentially).
 		fetchSem := make(chan struct{}, 4)
 
+		ctx := cmd.Context()
+
 		for _, repo := range repositories {
 			go func(r *git.Repository) {
 				defer wg.Done()
@@ -78,7 +80,7 @@ branch status, and other important information.`,
 				var fetchWarn string
 				if !noFetch {
 					fetchSem <- struct{}{}
-					_, fetchErr := r.Update(true, false)
+					_, fetchErr := r.Update(ctx, true, false)
 					<-fetchSem
 					if fetchErr != nil {
 						fetchWarn = fmt.Sprintf("Warning: failed to fetch %s: %v", r.Path, fetchErr)
@@ -86,7 +88,7 @@ branch status, and other important information.`,
 				}
 
 				// Get repository status
-				status, statusErr := r.Status()
+				status, statusErr := r.Status(ctx)
 				if statusErr != nil {
 					mu.Lock()
 					results = append(results, repoStatus{
@@ -99,7 +101,7 @@ branch status, and other important information.`,
 				}
 
 				// Mark stale branches
-				if markErr := r.MarkStaleBranches(status, threshold); markErr != nil {
+				if markErr := r.MarkStaleBranches(ctx, status, threshold); markErr != nil {
 					fetchWarn += fmt.Sprintf("\nWarning: failed to check stale branches for %s: %v", r.Path, markErr)
 				}
 

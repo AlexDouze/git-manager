@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -77,11 +78,11 @@ Examples:
 		// --no-prune-current is the legacy way to keep current; honour it
 		effectiveKeepCurrent := keepCurrent || noPruneCurrent
 
-		return pruneRepositories(repositories, isDryRun, effectiveKeepCurrent)
+		return pruneRepositories(cmd.Context(), repositories, isDryRun, effectiveKeepCurrent)
 	},
 }
 
-func pruneRepositories(repositories []*git.Repository, isDryRun bool, keepCurrentBranch bool) error {
+func pruneRepositories(ctx context.Context, repositories []*git.Repository, isDryRun bool, keepCurrentBranch bool) error {
 	pruneResults := make(map[string]git.PruneResult)
 	var mutex sync.Mutex
 	var wg sync.WaitGroup
@@ -96,7 +97,7 @@ func pruneRepositories(repositories []*git.Repository, isDryRun bool, keepCurren
 
 			result := git.PruneResult{Repository: repo}
 
-			_, err := repo.Status()
+			_, err := repo.Status(ctx)
 			if err != nil {
 				result.Error = fmt.Errorf("failed to get status: %w", err)
 				mutex.Lock()
@@ -105,7 +106,7 @@ func pruneRepositories(repositories []*git.Repository, isDryRun bool, keepCurren
 				return
 			}
 
-			prunedBranches, err := repo.PruneBranches(goneOnly, mergedOnly, isDryRun, keepCurrentBranch)
+			prunedBranches, err := repo.PruneBranches(ctx, goneOnly, mergedOnly, isDryRun, keepCurrentBranch)
 			if err != nil {
 				result.Error = fmt.Errorf("failed to prune branches: %w", err)
 			} else {

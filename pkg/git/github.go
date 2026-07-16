@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -8,15 +9,16 @@ import (
 
 // GithubCommandExecutor defines an interface for executing GitHub CLI commands
 type GithubCommandExecutor interface {
-	Execute(args ...string) ([]byte, error)
+	Execute(ctx context.Context, args ...string) ([]byte, error)
 }
 
 // DefaultGithubCommandExecutor is the default implementation of GithubCommandExecutor
 type DefaultGithubCommandExecutor struct{}
 
-// Execute executes a GitHub CLI command with the given arguments
-func (e *DefaultGithubCommandExecutor) Execute(args ...string) ([]byte, error) {
-	cmd := exec.Command("gh", args...)
+// Execute executes a GitHub CLI command with the given arguments.
+// The command is bound to ctx, so cancelling ctx terminates the underlying gh process.
+func (e *DefaultGithubCommandExecutor) Execute(ctx context.Context, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "gh", args...)
 	return cmd.Output()
 }
 
@@ -29,12 +31,12 @@ type githubRepository struct {
 }
 
 // ListGitHubRepositories lists repositories from a GitHub organization or username
-func ListGitHubRepositories(owner string) ([]Repository, error) {
-	return ListGitHubRepositoriesWithExecutor(owner, &DefaultGithubCommandExecutor{})
+func ListGitHubRepositories(ctx context.Context, owner string) ([]Repository, error) {
+	return ListGitHubRepositoriesWithExecutor(ctx, owner, &DefaultGithubCommandExecutor{})
 }
 
 // ListGitHubRepositoriesWithExecutor lists repositories using a custom executor (useful for testing)
-func ListGitHubRepositoriesWithExecutor(owner string, executor GithubCommandExecutor) ([]Repository, error) {
+func ListGitHubRepositoriesWithExecutor(ctx context.Context, owner string, executor GithubCommandExecutor) ([]Repository, error) {
 	// Prepare the GitHub CLI command
 	args := []string{"repo", "list"}
 	if owner != "" {
@@ -44,7 +46,7 @@ func ListGitHubRepositoriesWithExecutor(owner string, executor GithubCommandExec
 	args = append(args, "--limit", fmt.Sprintf("%d", 1000))
 
 	// Execute the GitHub CLI command
-	output, err := executor.Execute(args...)
+	output, err := executor.Execute(ctx, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute GitHub CLI: %w", err)
 	}
