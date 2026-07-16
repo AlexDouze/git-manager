@@ -8,6 +8,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
@@ -52,6 +53,7 @@ type Model struct {
 	repoKeys   repoKeyMap
 	byPath     map[string]int // repo path -> index in the current item slice
 	statusBusy bool           // async status load in flight
+	bulkBusy   bool           // an update-all/prune-all pass is in flight
 
 	branches   list.Model
 	branchKeys branchKeyMap
@@ -159,6 +161,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case opDoneMsg:
 		return m.handleOpDone(msg)
 
+	case bulkOpDoneMsg:
+		return m.handleBulkOpDone(msg)
+
 	case ghReposLoadedMsg, ghCloneDoneMsg:
 		return m.updateGH(msg)
 	}
@@ -197,19 +202,56 @@ func (m Model) handleOpDone(msg opDoneMsg) (tea.Model, tea.Cmd) {
 
 	m.footer = msg.summary
 	m.footerErr = msg.err != nil
+
+	// The action is done either way, so the row's busy indicator (if this was a
+	// single-repo update/prune) no longer applies.
+	clearCmd := m.clearRepoBusy(msg.path)
 	if msg.err != nil {
-		return m, nil
+		return m, clearCmd
 	}
 
 	// On success, re-read the affected repo so its rows/badges reflect the
 	// change. A branch mutation also refreshes the open branch list.
-	var cmds []tea.Cmd
+	cmds := []tea.Cmd{clearCmd}
 	if c := m.refreshRepo(msg.path); c != nil {
 		cmds = append(cmds, c)
 	}
 	if m.screen == screenBranches && m.activeRepo != nil && m.activeRepo.Path == msg.path && !m.branchBusy {
 		m.branchBusy = true
 		cmds = append(cmds, m.branches.StartSpinner(), loadBranchesCmd(m.ctx, m.activeRepo))
+	}
+	return m, tea.Batch(cmds...)
+}
+
+// handleBulkOpDone folds the result of an update-all/prune-all pass back into
+// the model: clears the bulk-busy guard and every row's busy indicator, sets
+// an aggregate footer summary, and reloads every repo's status so rows
+// reflect the change.
+func (m Model) handleBulkOpDone(msg bulkOpDoneMsg) (tea.Model, tea.Cmd) {
+	m.bulkBusy = false
+	m.footer = msg.summary
+	m.footerErr = false
+	for _, r := range msg.results {
+		if r.err != nil {
+			m.footerErr = true
+			break
+		}
+	}
+
+	items := m.repos.Items()
+	cmds := make([]tea.Cmd, 0, len(items)+1)
+	for i, li := range items {
+		it, ok := li.(repoItem)
+		if !ok || !it.busy {
+			continue
+		}
+		it.busy = false
+		it.busyLabel = ""
+		cmds = append(cmds, m.repos.SetItem(i, it))
+	}
+
+	if c := m.refresh(); c != nil {
+		cmds = append(cmds, c)
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -223,9 +265,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.confirm != nil {
 		switch msg.String() {
 		case "y":
-			cmd := m.confirm.onConfirm
+			cs := m.confirm
 			m.confirm = nil
-			return m, cmd
+			var acceptCmd tea.Cmd
+			if cs.onAccept != nil {
+				acceptCmd = cs.onAccept(&m)
+			}
+			return m, tea.Batch(acceptCmd, cs.onConfirm)
 		case "n", "esc", "ctrl+c":
 			m.confirm = nil
 			return m, nil
@@ -258,16 +304,33 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.repoKeys.Enter):
 			return m.drillIn()
 		case key.Matches(msg, m.repoKeys.Refresh):
-			// Ignore refresh while a status load is already running so we don't
-			// stack overlapping worker-pool passes over the same repos.
-			if m.statusBusy {
+			// Ignore refresh while a status load or a bulk pass is already
+			// running so we don't stack overlapping worker-pool passes over the
+			// same repos.
+			if m.statusBusy || m.bulkBusy {
 				return m, nil
 			}
 			return m, m.refresh()
 		case key.Matches(msg, m.repoKeys.Update):
+			if m.bulkBusy {
+				return m, nil
+			}
 			return m.updateSelectedRepo()
 		case key.Matches(msg, m.repoKeys.Prune):
+			if m.bulkBusy {
+				return m, nil
+			}
 			return m.pruneSelectedRepo()
+		case key.Matches(msg, m.repoKeys.UpdateAll):
+			if m.bulkBusy {
+				return m, nil
+			}
+			return m.updateAllRepos()
+		case key.Matches(msg, m.repoKeys.PruneAll):
+			if m.bulkBusy {
+				return m, nil
+			}
+			return m.pruneAllRepos()
 		case key.Matches(msg, m.repoKeys.Clone):
 			return m.openGHBrowse()
 		}
@@ -362,7 +425,8 @@ func (m Model) updateSelectedRepo() (tea.Model, tea.Cmd) {
 	}
 	m.footer = "updating " + sel.repo.Name + "…"
 	m.footerErr = false
-	return m, updateCmd(m.ctx, sel.repo)
+	setCmd := m.setRepoBusy(sel.repo.Path, "updating…")
+	return m, tea.Batch(setCmd, updateCmd(m.ctx, sel.repo))
 }
 
 // pruneSelectedRepo asks for confirmation, then prunes gone branches in the
@@ -372,11 +436,118 @@ func (m Model) pruneSelectedRepo() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	path := sel.repo.Path
 	m.confirm = &confirmState{
-		prompt:    "Prune gone branches in " + sel.repo.Name + "?",
+		prompt: "Prune gone branches in " + sel.repo.Name + "?",
+		onAccept: func(m *Model) tea.Cmd {
+			return m.setRepoBusy(path, "pruning…")
+		},
 		onConfirm: pruneGoneCmd(m.ctx, sel.repo),
 	}
 	return m, nil
+}
+
+// updateAllRepos fetches+pulls every repository in the list, in parallel via
+// the worker pool. Unlike prune-all this needs no confirmation: fetch+pull
+// mirrors the single-repo `u` action and mutates nothing destructively.
+func (m Model) updateAllRepos() (tea.Model, tea.Cmd) {
+	repos := m.allRepos()
+	if len(repos) == 0 {
+		return m, nil
+	}
+	m.bulkBusy = true
+	m.footer = fmt.Sprintf("updating %d repositories…", len(repos))
+	m.footerErr = false
+	busyCmd := m.setAllRepoBusy("updating…")
+	return m, tea.Batch(busyCmd, updateAllCmd(m.ctx, repos))
+}
+
+// pruneAllRepos asks for confirmation, then prunes gone branches across every
+// repository in the list.
+func (m Model) pruneAllRepos() (tea.Model, tea.Cmd) {
+	repos := m.allRepos()
+	if len(repos) == 0 {
+		return m, nil
+	}
+	m.confirm = &confirmState{
+		prompt: fmt.Sprintf("Prune gone branches in %d repositories?", len(repos)),
+		onAccept: func(m *Model) tea.Cmd {
+			m.bulkBusy = true
+			m.footer = fmt.Sprintf("pruning %d repositories…", len(repos))
+			m.footerErr = false
+			return m.setAllRepoBusy("pruning…")
+		},
+		onConfirm: pruneAllCmd(m.ctx, repos),
+	}
+	return m, nil
+}
+
+// allRepos returns the repository behind every current row in the repo list.
+func (m Model) allRepos() []*git.Repository {
+	items := m.repos.Items()
+	repos := make([]*git.Repository, 0, len(items))
+	for _, li := range items {
+		if it, ok := li.(repoItem); ok {
+			repos = append(repos, it.repo)
+		}
+	}
+	return repos
+}
+
+// setRepoBusy marks a single row (by repo path) busy with the given label.
+// Returns nil if the path is not in the list.
+func (m *Model) setRepoBusy(path, label string) tea.Cmd {
+	idx, ok := m.byPath[path]
+	if !ok {
+		return nil
+	}
+	items := m.repos.Items()
+	if idx >= len(items) {
+		return nil
+	}
+	it, ok := items[idx].(repoItem)
+	if !ok {
+		return nil
+	}
+	it.busy = true
+	it.busyLabel = label
+	return m.repos.SetItem(idx, it)
+}
+
+// setAllRepoBusy marks every row in the repo list busy with the given label.
+func (m *Model) setAllRepoBusy(label string) tea.Cmd {
+	items := m.repos.Items()
+	cmds := make([]tea.Cmd, 0, len(items))
+	for i, li := range items {
+		it, ok := li.(repoItem)
+		if !ok {
+			continue
+		}
+		it.busy = true
+		it.busyLabel = label
+		cmds = append(cmds, m.repos.SetItem(i, it))
+	}
+	return tea.Batch(cmds...)
+}
+
+// clearRepoBusy clears a single row's busy indicator (by repo path), if set.
+// Returns nil if the path is not in the list or the row wasn't busy.
+func (m *Model) clearRepoBusy(path string) tea.Cmd {
+	idx, ok := m.byPath[path]
+	if !ok {
+		return nil
+	}
+	items := m.repos.Items()
+	if idx >= len(items) {
+		return nil
+	}
+	it, ok := items[idx].(repoItem)
+	if !ok || !it.busy {
+		return nil
+	}
+	it.busy = false
+	it.busyLabel = ""
+	return m.repos.SetItem(idx, it)
 }
 
 // updateActiveRepo fetches+pulls the repo whose branches are being shown.

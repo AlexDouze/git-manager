@@ -13,12 +13,17 @@ import (
 
 // repoItem is a single row in the repository list. status is nil until the
 // async status load completes; loaded distinguishes "still loading" from
-// "loaded, no status because it errored".
+// "loaded, no status because it errored". busy/busyLabel track a mutating
+// action (checkout/update/prune, single or bulk) actively running against this
+// repo, so the row can show e.g. "updating…" instead of stale badges.
 type repoItem struct {
 	repo    *git.Repository
 	status  *git.RepositoryStatus
 	loaded  bool
 	loadErr error
+
+	busy      bool
+	busyLabel string
 }
 
 // title is the "host/org/name" identity used for display and filtering.
@@ -87,9 +92,15 @@ func (d repoDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 	}
 
 	identity := it.title()
-	badges := it.statusBadges(d.styles)
-	if badges == "" {
-		badges = d.styles.dim.Render("loading…")
+	var badges string
+	switch {
+	case it.busy:
+		badges = d.styles.busy.Render(it.busyLabel)
+	default:
+		badges = it.statusBadges(d.styles)
+		if badges == "" {
+			badges = d.styles.dim.Render("loading…")
+		}
 	}
 
 	prefix := "  "

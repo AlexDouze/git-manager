@@ -7,11 +7,13 @@ import "charm.land/bubbles/v2/key"
 // these are the app-specific actions layered on top and surfaced in the help bar
 // via the list's AdditionalShortHelpKeys hook.
 type repoKeyMap struct {
-	Enter   key.Binding
-	Refresh key.Binding
-	Update  key.Binding
-	Prune   key.Binding
-	Clone   key.Binding
+	Enter     key.Binding
+	Refresh   key.Binding
+	Update    key.Binding
+	Prune     key.Binding
+	UpdateAll key.Binding
+	PruneAll  key.Binding
+	Clone     key.Binding
 }
 
 func newRepoKeyMap() repoKeyMap {
@@ -32,6 +34,17 @@ func newRepoKeyMap() repoKeyMap {
 			key.WithKeys("p"),
 			key.WithHelp("p", "prune gone"),
 		),
+		UpdateAll: key.NewBinding(
+			// Bubble Tea v2 reports a shifted letter with Text set to the
+			// uppercase rune, so String() is "U" — distinct from "u" and safe to
+			// bind separately (same reasoning as the ghKeyMap space fix).
+			key.WithKeys("U"),
+			key.WithHelp("U", "update all"),
+		),
+		PruneAll: key.NewBinding(
+			key.WithKeys("P"),
+			key.WithHelp("P", "prune all"),
+		),
 		Clone: key.NewBinding(
 			key.WithKeys("c"),
 			key.WithHelp("c", "clone"),
@@ -42,7 +55,7 @@ func newRepoKeyMap() repoKeyMap {
 // shortHelp returns the app-specific bindings appended to the list's built-in
 // help (navigation/filter/quit).
 func (k repoKeyMap) shortHelp() []key.Binding {
-	return []key.Binding{k.Enter, k.Refresh, k.Update, k.Prune, k.Clone}
+	return []key.Binding{k.Enter, k.Refresh, k.Update, k.Prune, k.UpdateAll, k.PruneAll, k.Clone}
 }
 
 // branchKeyMap holds the shortcuts active on the branch-list screen. Navigation,

@@ -199,6 +199,204 @@ func TestConfirmCancelAndAccept(t *testing.T) {
 	}
 }
 
+func TestUpdateAllMarksRowsBusyAndBulkBusy(t *testing.T) {
+	m := seededModel(t, "alpha", "beta")
+
+	tm, cmd := m.Update(keyPress("U"))
+	m = tm.(Model)
+	if !m.bulkBusy {
+		t.Error("U should set bulkBusy")
+	}
+	if cmd == nil {
+		t.Error("U should return a command")
+	}
+	for _, li := range m.repos.Items() {
+		it := li.(repoItem)
+		if !it.busy || it.busyLabel != "updating…" {
+			t.Errorf("repo %s: busy=%v label=%q, want busy with \"updating…\"", it.repo.Name, it.busy, it.busyLabel)
+		}
+	}
+	if !strings.Contains(m.footer, "2") {
+		t.Errorf("footer = %q, want it to mention the repo count", m.footer)
+	}
+}
+
+func TestPruneAllOpensConfirmWithCount(t *testing.T) {
+	m := seededModel(t, "alpha", "beta", "gamma")
+
+	tm, _ := m.Update(keyPress("P"))
+	m = tm.(Model)
+	if m.confirm == nil {
+		t.Fatal("P should open a confirm overlay")
+	}
+	if !strings.Contains(m.confirm.prompt, "3") {
+		t.Errorf("confirm prompt = %q, want it to mention the repo count", m.confirm.prompt)
+	}
+	// No row should be marked busy yet -- only onAccept (on y) does that.
+	for _, li := range m.repos.Items() {
+		if li.(repoItem).busy {
+			t.Error("rows should not be busy before the prune-all confirm is accepted")
+		}
+	}
+}
+
+func TestPruneAllAcceptMarksRowsBusy(t *testing.T) {
+	m := seededModel(t, "alpha", "beta")
+
+	tm, _ := m.Update(keyPress("P"))
+	m = tm.(Model)
+	tm, cmd := m.Update(keyPress("y"))
+	m = tm.(Model)
+
+	if !m.bulkBusy {
+		t.Error("accepting prune-all should set bulkBusy")
+	}
+	if cmd == nil {
+		t.Error("accepting prune-all should return the pending command")
+	}
+	for _, li := range m.repos.Items() {
+		it := li.(repoItem)
+		if !it.busy || it.busyLabel != "pruning…" {
+			t.Errorf("repo %s: busy=%v label=%q, want busy with \"pruning…\"", it.repo.Name, it.busy, it.busyLabel)
+		}
+	}
+}
+
+func TestPruneAllCancelLeavesRowsIdle(t *testing.T) {
+	m := seededModel(t, "alpha", "beta")
+
+	tm, _ := m.Update(keyPress("P"))
+	m = tm.(Model)
+	tm, _ = m.Update(keyPress("n"))
+	m = tm.(Model)
+
+	if m.bulkBusy {
+		t.Error("cancelling prune-all should not set bulkBusy")
+	}
+	for _, li := range m.repos.Items() {
+		if li.(repoItem).busy {
+			t.Error("cancelling prune-all should leave rows idle")
+		}
+	}
+}
+
+func TestBulkOpDoneClearsBusyAndSetsFooter(t *testing.T) {
+	m := seededModel(t, "alpha", "beta")
+	tm, _ := m.Update(keyPress("U"))
+	m = tm.(Model)
+
+	paths := make([]string, 0, len(m.repos.Items()))
+	for _, li := range m.repos.Items() {
+		paths = append(paths, li.(repoItem).repo.Path)
+	}
+
+	tm, cmd := m.Update(bulkOpDoneMsg{
+		kind:    opUpdate,
+		results: []bulkResult{{path: paths[0]}, {path: paths[1]}},
+		summary: "updated 2/2 repositories",
+	})
+	m = tm.(Model)
+
+	if m.bulkBusy {
+		t.Error("bulkOpDoneMsg should clear bulkBusy")
+	}
+	if m.footer != "updated 2/2 repositories" {
+		t.Errorf("footer = %q, want the bulk summary", m.footer)
+	}
+	if m.footerErr {
+		t.Error("a bulk result with no errors should not set footerErr")
+	}
+	for _, li := range m.repos.Items() {
+		if li.(repoItem).busy {
+			t.Error("bulkOpDoneMsg should clear every row's busy flag")
+		}
+	}
+	if cmd == nil {
+		t.Error("bulkOpDoneMsg should trigger a status reload command")
+	}
+}
+
+func TestBulkOpDoneWithErrorSetsFooterErr(t *testing.T) {
+	m := seededModel(t, "alpha")
+	tm, _ := m.Update(keyPress("U"))
+	m = tm.(Model)
+	path := m.repos.Items()[0].(repoItem).repo.Path
+
+	tm, _ = m.Update(bulkOpDoneMsg{
+		kind:    opUpdate,
+		results: []bulkResult{{path: path, err: errors.New("boom")}},
+		summary: "updated 0/1 repositories (1 failed)",
+	})
+	m = tm.(Model)
+
+	if !m.footerErr {
+		t.Error("a bulk result with a failure should set footerErr")
+	}
+}
+
+func TestBulkShortcutsNoopWhileBulkBusy(t *testing.T) {
+	m := seededModel(t, "alpha", "beta")
+	tm, _ := m.Update(keyPress("U"))
+	m = tm.(Model)
+
+	// A second U while the first pass is in flight must not stack another
+	// worker-pool pass or reset the footer.
+	footerBefore := m.footer
+	tm, cmd := m.Update(keyPress("U"))
+	m = tm.(Model)
+	if cmd != nil {
+		t.Error("U while bulkBusy should be a no-op (no command)")
+	}
+	if m.footer != footerBefore {
+		t.Error("U while bulkBusy should not change the footer")
+	}
+
+	// Single-repo u/p and refresh r should also no-op while a bulk pass runs.
+	for _, k := range []string{"u", "p", "r"} {
+		tm, cmd = m.Update(keyPress(k))
+		m = tm.(Model)
+		if cmd != nil {
+			t.Errorf("%q while bulkBusy should be a no-op (no command)", k)
+		}
+		if m.confirm != nil {
+			t.Errorf("%q while bulkBusy should not open a confirm overlay", k)
+		}
+	}
+}
+
+func TestUpdateSelectedRepoMarksRowBusy(t *testing.T) {
+	m := seededModel(t, "alpha", "beta")
+
+	tm, cmd := m.Update(keyPress("u"))
+	m = tm.(Model)
+	if cmd == nil {
+		t.Fatal("u should return a command")
+	}
+
+	items := m.repos.Items()
+	sel := items[m.repos.Index()].(repoItem)
+	if !sel.busy || sel.busyLabel != "updating…" {
+		t.Errorf("selected repo: busy=%v label=%q, want busy with \"updating…\"", sel.busy, sel.busyLabel)
+	}
+	// The non-selected row must be untouched.
+	for i, li := range items {
+		if i == m.repos.Index() {
+			continue
+		}
+		if li.(repoItem).busy {
+			t.Error("only the selected repo should be marked busy by single-repo update")
+		}
+	}
+
+	// The matching opDoneMsg clears the busy flag again.
+	tm, _ = m.Update(opDoneMsg{kind: opUpdate, path: sel.repo.Path, summary: "updated " + sel.repo.Name})
+	m = tm.(Model)
+	updated := m.repos.Items()[m.repos.Index()].(repoItem)
+	if updated.busy {
+		t.Error("opDoneMsg should clear the row's busy flag")
+	}
+}
+
 func TestFilterSuppressesShortcuts(t *testing.T) {
 	m := seededModel(t, "alpha", "beta")
 
@@ -450,5 +648,124 @@ func TestDeleteBranchCmd(t *testing.T) {
 				t.Errorf("summary = %q, want it to contain %q", msg.summary, tc.wantSummarySubst)
 			}
 		})
+	}
+}
+
+// branchRefLine builds a single for-each-ref line in the NUL-separated format
+// the real git package's ListBranches expects (see branchRefFormat in
+// pkg/git/repository.go): refname, HEAD marker, upstream, track, date, worktree.
+func branchRefLine(name, head, upstream string) string {
+	return strings.Join([]string{name, head, upstream, "", "", ""}, "\x00")
+}
+
+func TestUpdateAllCmd(t *testing.T) {
+	branchLine := branchRefLine("main", "*", "origin/main")
+
+	makeRepo := func(name string, fetchErr error) *git.Repository {
+		r := newRepo(name)
+		r.Path = "/tmp"
+		r.SetGitCommandExecutor(mockExecutor{
+			fn: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
+				if len(args) == 0 {
+					return nil, errors.New("unexpected empty command")
+				}
+				switch args[0] {
+				case "rev-parse":
+					return []byte("main"), nil
+				case "fetch":
+					return nil, fetchErr
+				case "status":
+					return []byte(""), nil
+				case "for-each-ref":
+					return []byte(branchLine), nil
+				case "stash":
+					return []byte(""), nil
+				case "checkout":
+					return []byte(""), nil
+				}
+				return nil, errors.New("unexpected command")
+			},
+		})
+		return r
+	}
+
+	repos := []*git.Repository{
+		makeRepo("alpha", nil),
+		makeRepo("beta", errors.New("boom")),
+	}
+
+	msg := updateAllCmd(context.Background(), repos)().(bulkOpDoneMsg)
+
+	if msg.kind != opUpdate {
+		t.Errorf("kind = %v, want opUpdate", msg.kind)
+	}
+	if len(msg.results) != 2 {
+		t.Fatalf("results len = %d, want 2", len(msg.results))
+	}
+	failed := 0
+	for _, r := range msg.results {
+		if r.err != nil {
+			failed++
+		}
+	}
+	if failed != 1 {
+		t.Errorf("failed count = %d, want 1", failed)
+	}
+	if !strings.Contains(msg.summary, "1/2") || !strings.Contains(msg.summary, "1 failed") {
+		t.Errorf("summary = %q, want it to mention 1/2 and 1 failed", msg.summary)
+	}
+}
+
+func TestPruneAllCmd(t *testing.T) {
+	branchLine := branchRefLine("main", "*", "origin/main")
+
+	makeRepo := func(name string, statusErr error) *git.Repository {
+		r := newRepo(name)
+		r.Path = "/tmp"
+		r.SetGitCommandExecutor(mockExecutor{
+			fn: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
+				if len(args) == 0 {
+					return nil, errors.New("unexpected empty command")
+				}
+				switch args[0] {
+				case "status":
+					return []byte(""), statusErr
+				case "for-each-ref":
+					return []byte(branchLine), nil
+				case "stash":
+					return []byte(""), nil
+				case "symbolic-ref":
+					return []byte("origin/main"), nil
+				}
+				return nil, errors.New("unexpected command")
+			},
+		})
+		return r
+	}
+
+	repos := []*git.Repository{
+		makeRepo("alpha", nil),
+		makeRepo("beta", errors.New("boom")),
+	}
+
+	msg := pruneAllCmd(context.Background(), repos)().(bulkOpDoneMsg)
+
+	if msg.kind != opDeleteBranch {
+		t.Errorf("kind = %v, want opDeleteBranch", msg.kind)
+	}
+	if len(msg.results) != 2 {
+		t.Fatalf("results len = %d, want 2", len(msg.results))
+	}
+	failed := 0
+	for _, r := range msg.results {
+		if r.err != nil {
+			failed++
+		}
+	}
+	if failed != 1 {
+		t.Errorf("failed count = %d, want 1", failed)
+	}
+	if !strings.Contains(msg.summary, "1/2") {
+		t.Errorf("summary = %q, want it to mention 1/2", msg.summary)
 	}
 }
