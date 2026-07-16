@@ -42,6 +42,7 @@ const (
 	opCheckout opKind = iota
 	opUpdate
 	opDeleteBranch
+	opOpenEditor
 )
 
 // opDoneMsg reports the completion of a mutating git action (checkout, update,

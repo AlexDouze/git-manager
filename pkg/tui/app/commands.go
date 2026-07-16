@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -87,6 +89,32 @@ func updateCmd(ctx context.Context, r *git.Repository) tea.Cmd {
 		}
 		return msg
 	}
+}
+
+// openEditorCmd launches $EDITOR (falling back to "vi") on the given
+// repository's path via tea.ExecProcess, which suspends the TUI and hands the
+// terminal to the editor until it exits.
+func openEditorCmd(r *git.Repository) tea.Cmd {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vi"
+	}
+	c := exec.Command(editor, r.Path)
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return openEditorMsg(r, err)
+	})
+}
+
+// openEditorMsg builds the opDoneMsg reported once the editor process launched
+// by openEditorCmd exits.
+func openEditorMsg(r *git.Repository, err error) tea.Msg {
+	msg := opDoneMsg{kind: opOpenEditor, path: r.Path, err: err}
+	if err == nil {
+		msg.summary = "closed editor for " + r.Name
+	} else {
+		msg.summary = "editor failed: " + err.Error()
+	}
+	return msg
 }
 
 // deleteBranchCmd deletes a branch. With force=false a "not fully merged"

@@ -14,6 +14,7 @@ type repoKeyMap struct {
 	UpdateAll key.Binding
 	PruneAll  key.Binding
 	Clone     key.Binding
+	Open      key.Binding
 }
 
 func newRepoKeyMap() repoKeyMap {
@@ -49,13 +50,17 @@ func newRepoKeyMap() repoKeyMap {
 			key.WithKeys("c"),
 			key.WithHelp("c", "clone"),
 		),
+		Open: key.NewBinding(
+			key.WithKeys("o"),
+			key.WithHelp("o", "open in editor"),
+		),
 	}
 }
 
 // shortHelp returns the app-specific bindings appended to the list's built-in
 // help (navigation/filter/quit).
 func (k repoKeyMap) shortHelp() []key.Binding {
-	return []key.Binding{k.Enter, k.Refresh, k.Update, k.Prune, k.UpdateAll, k.PruneAll, k.Clone}
+	return []key.Binding{k.Enter, k.Refresh, k.Update, k.Prune, k.UpdateAll, k.PruneAll, k.Clone, k.Open}
 }
 
 // branchKeyMap holds the shortcuts active on the branch-list screen. Navigation,
