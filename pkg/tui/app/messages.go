@@ -23,3 +23,13 @@ type repoStatusResult struct {
 type statusesLoadedMsg struct {
 	results []repoStatusResult
 }
+
+// branchesLoadedMsg carries the result of loadBranchesCmd: the branch list for
+// the repository we drilled into, or the error that stopped it. path identifies
+// the repo so a stale message (from a repo the user already navigated away from)
+// can be ignored.
+type branchesLoadedMsg struct {
+	path     string
+	branches []git.BranchInfo
+	err      error
+}

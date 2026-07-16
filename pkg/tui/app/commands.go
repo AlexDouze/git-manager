@@ -43,3 +43,17 @@ func loadStatusesCmd(ctx context.Context, repos []*git.Repository) tea.Cmd {
 		return statusesLoadedMsg{results: results}
 	}
 }
+
+// loadBranchesCmd lists a single repository's branches for the drill-in screen.
+// It reuses Status (rather than the bare ListBranches) so the branch rows carry
+// the same stale marking the repo-list badges use.
+func loadBranchesCmd(ctx context.Context, r *git.Repository) tea.Cmd {
+	return func() tea.Msg {
+		status, err := r.Status(ctx)
+		if err != nil {
+			return branchesLoadedMsg{path: r.Path, err: err}
+		}
+		_ = r.MarkStaleBranches(ctx, status, staleThreshold)
+		return branchesLoadedMsg{path: r.Path, branches: status.Branches}
+	}
+}
