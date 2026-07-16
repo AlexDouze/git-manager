@@ -3,13 +3,9 @@ package cmd
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/alexDouze/gitm/pkg/config"
-	"github.com/alexDouze/gitm/pkg/git"
-	"github.com/alexDouze/gitm/pkg/tui"
+	"github.com/alexDouze/gitm/pkg/tui/app"
 	"github.com/spf13/cobra"
 )
 
@@ -41,63 +37,16 @@ Examples:
 			ghCloneOwner = args[0]
 		}
 
-		// If no owner is provided, use the authenticated user
-		if ghCloneOwner == "" {
-			fmt.Println("No owner provided. Using authenticated user.")
-		}
-
 		// Load configuration
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			return fmt.Errorf("failed to load configuration: %w", err)
 		}
 
-		// Use specified root directory or default from config
-		targetDir := cfg.RootDirectory
-		if ghCloneRootDir != "" {
-			targetDir = ghCloneRootDir
-		}
-
-		// List repositories using GitHub CLI
-		repos, err := git.ListGitHubRepositories(cmd.Context(), ghCloneOwner, ghCloneLimit)
-		if err != nil {
-			return fmt.Errorf("failed to list repositories: %w", err)
-		}
-
-		if len(repos) == 0 {
-			fmt.Println("No repositories found.")
-			return nil
-		}
-
-		// Flag repositories that already exist on disk so the picker can show
-		// them as cloned and refuse to select them.
-		existing := make(map[string]bool, len(repos))
-		for _, repo := range repos {
-			dir := filepath.Join(targetDir, repo.Host, repo.Organization, repo.Name)
-			if _, statErr := os.Stat(dir); statErr == nil {
-				existing[fmt.Sprintf("%s/%s/%s", repo.Host, repo.Organization, repo.Name)] = true
-			}
-		}
-
-		selectedRepos, err := tui.SelectGithubReposRender(repos, existing)
-		if err != nil {
-			return fmt.Errorf("failed to select repositories: %w", err)
-		}
-
-		var cloneOptions []string
-		if cfg.Clone.DefaultOptions != "" {
-			cloneOptions = strings.Fields(cfg.Clone.DefaultOptions)
-		}
-
-		for _, repo := range selectedRepos {
-			url := fmt.Sprintf("git@%s:%s/%s.git", repo.Host, repo.Organization, repo.Name)
-			if err = repo.Clone(cmd.Context(), targetDir, url, cloneOptions); err != nil {
-				fmt.Printf("❌ Error cloning repository %s: %s\n", repo.Name, err)
-			} else {
-				fmt.Printf("✅ Repository %s cloned successfully in %s\n", repo.Name, repo.Path)
-			}
-		}
-		return nil
+		// Launch the interactive GitHub clone browser. It lists the owner's
+		// repositories, lets the user multi-select, and clones the selection
+		// into rootDir/host/org/name (skipping any already on disk).
+		return app.RunBrowse(cmd.Context(), cfg, ghCloneOwner, ghCloneRootDir, ghCloneLimit)
 	},
 }
 

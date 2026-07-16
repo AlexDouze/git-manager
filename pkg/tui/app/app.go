@@ -23,7 +23,12 @@ type screen int
 const (
 	screenRepos    screen = iota // the top-level repository list
 	screenBranches               // the branch list for a drilled-into repo
+	screenGHBrowse               // the GitHub clone browser
 )
+
+// ghBrowseLimit caps how many repos the in-app clone browser lists per owner,
+// matching the `gh-clone --limit` default.
+const ghBrowseLimit = 1000
 
 // Filter scopes which repositories the app loads. It mirrors the shared
 // cmd.FilterFlags so `gitm --org foo` can open the app pre-scoped.
@@ -51,6 +56,8 @@ type Model struct {
 	branchKeys branchKeyMap
 	activeRepo *git.Repository // the repo whose branches are shown
 	branchBusy bool            // async branch load in flight
+
+	gh *ghScreen // GitHub clone browser; non-nil only while screenGHBrowse
 
 	confirm   *confirmState // orthogonal yes/no overlay; intercepts keys when set
 	footer    string        // last op result shown in the footer line
@@ -111,10 +118,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.repos.SetSize(msg.Width, msg.Height)
 		m.branches.SetSize(msg.Width, msg.Height)
+		if m.gh != nil {
+			m.gh.setSize(msg.Width, msg.Height)
+		}
 		return m, nil
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+
+	case ghExitMsg:
+		return m.closeGHBrowse()
 
 	case reposLoadedMsg:
 		m.loading = false
@@ -144,9 +157,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case opDoneMsg:
 		return m.handleOpDone(msg)
+
+	case ghReposLoadedMsg, ghCloneDoneMsg:
+		return m.updateGH(msg)
 	}
 
 	return m.updateActiveList(msg)
+}
+
+// updateGH forwards a message to the GitHub browser sub-model, if present.
+func (m Model) updateGH(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.gh == nil {
+		return m, nil
+	}
+	updated, cmd := m.gh.update(msg)
+	m.gh = &updated
+	return m, cmd
 }
 
 // handleOpDone folds a completed mutating action back into the model: it sets
@@ -206,6 +232,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// The GitHub browser is a self-contained sub-model that owns all of its
+	// keys (including its own filter state), so route to it before anything.
+	if m.screen == screenGHBrowse {
+		return m.updateGH(msg)
+	}
+
 	// While filtering, the active list owns every key (typing into the filter
 	// box, esc to cancel), so no app shortcut fires.
 	if m.activeList().FilterState() == list.Filtering {
@@ -235,6 +267,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m.updateSelectedRepo()
 		case key.Matches(msg, m.repoKeys.Prune):
 			return m.pruneSelectedRepo()
+		case key.Matches(msg, m.repoKeys.Clone):
+			return m.openGHBrowse()
 		}
 
 	case screenBranches:
@@ -298,6 +332,25 @@ func (m Model) back() (tea.Model, tea.Cmd) {
 	m.screen = screenRepos
 	m.activeRepo = nil
 	return m, nil
+}
+
+// openGHBrowse creates a GitHub clone browser and switches to it. The browser
+// prompts for an owner, so it launches without a fixed owner or root override.
+func (m Model) openGHBrowse() (tea.Model, tea.Cmd) {
+	gh := newGHScreen(m.ctx, m.cfg, m.styles, "", "", ghBrowseLimit)
+	gh.setSize(m.width, m.height)
+	m.gh = &gh
+	m.screen = screenGHBrowse
+	return m, m.gh.init()
+}
+
+// closeGHBrowse leaves the browser and returns to the repo list, reloading it
+// so any freshly cloned repositories appear.
+func (m Model) closeGHBrowse() (tea.Model, tea.Cmd) {
+	m.gh = nil
+	m.screen = screenRepos
+	m.loading = true
+	return m, loadReposCmd(m.cfg, m.filter)
 }
 
 // updateSelectedRepo fetches+pulls the repo highlighted in the repo list.
@@ -490,6 +543,8 @@ func (m Model) View() tea.View {
 	switch {
 	case m.err != nil:
 		content = "Error: " + m.err.Error() + "\n\nPress q to quit."
+	case m.screen == screenGHBrowse && m.gh != nil:
+		content = m.gh.view()
 	case m.screen == screenBranches:
 		content = m.branches.View()
 	default:

@@ -127,3 +127,26 @@ func pruneGoneCmd(ctx context.Context, r *git.Repository) tea.Cmd {
 		return msg
 	}
 }
+
+// loadGitHubReposCmd lists an owner's repositories via `gh` for the clone
+// browser. An empty owner lists the authenticated user's repos.
+func loadGitHubReposCmd(ctx context.Context, owner string, limit int) tea.Cmd {
+	return func() tea.Msg {
+		repos, err := git.ListGitHubRepositories(ctx, owner, limit)
+		return ghReposLoadedMsg{repos: repos, err: err}
+	}
+}
+
+// cloneReposCmd clones the selected repositories in parallel into
+// rootDir/host/org/name, applying the configured default clone options. Each
+// repo's outcome is reported independently so one failure doesn't hide the rest.
+func cloneReposCmd(ctx context.Context, repos []git.Repository, rootDir string, options []string) tea.Cmd {
+	return func() tea.Msg {
+		results := workerpool.Map(ctx, repos, workerpool.Default(), func(ctx context.Context, repo git.Repository) cloneResult {
+			url := fmt.Sprintf("git@%s:%s/%s.git", repo.Host, repo.Organization, repo.Name)
+			err := repo.Clone(ctx, rootDir, url, options)
+			return cloneResult{name: repo.Name, path: repo.Path, err: err}
+		})
+		return ghCloneDoneMsg{results: results}
+	}
+}
