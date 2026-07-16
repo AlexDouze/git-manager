@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -11,7 +12,7 @@ import (
 // MockGitCommandExecutor is a mock implementation of GitCommandExecutor for testing
 type MockGitCommandExecutor struct {
 	// ExecuteFunc allows tests to define custom behavior for the Execute method
-	ExecuteFunc func(repoPath string, stdout bool, args ...string) ([]byte, error)
+	ExecuteFunc func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error)
 }
 
 // TestRepository is a wrapper around Repository that overrides filesystem checks for testing
@@ -29,7 +30,7 @@ func NewTestRepository() *TestRepository {
 }
 
 // Status overrides the original Status method to bypass filesystem checks
-func (r *TestRepository) Status() (*RepositoryStatus, error) {
+func (r *TestRepository) Status(ctx context.Context) (*RepositoryStatus, error) {
 	status := &RepositoryStatus{
 		Repository: r.Repository,
 	}
@@ -41,17 +42,17 @@ func (r *TestRepository) Status() (*RepositoryStatus, error) {
 	}
 
 	// Get uncommitted changes
-	if err := r.getUncommittedChanges(status); err != nil {
+	if err := r.getUncommittedChanges(ctx, status); err != nil {
 		return nil, fmt.Errorf("failed to get uncommitted changes: %w", err)
 	}
 
 	// Get branch information
-	if err := r.getBranchInformation(status); err != nil {
+	if err := r.getBranchInformation(ctx, status); err != nil {
 		return nil, fmt.Errorf("failed to get branch information: %w", err)
 	}
 
 	// Check for stashes
-	if err := r.getStashInformation(status); err != nil {
+	if err := r.getStashInformation(ctx, status); err != nil {
 		return nil, fmt.Errorf("failed to get stash information: %w", err)
 	}
 
@@ -59,9 +60,9 @@ func (r *TestRepository) Status() (*RepositoryStatus, error) {
 }
 
 // Execute calls the mock's ExecuteFunc if defined, or returns a default response
-func (m *MockGitCommandExecutor) Execute(repoPath string, stdout bool, args ...string) ([]byte, error) {
+func (m *MockGitCommandExecutor) Execute(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
 	if m.ExecuteFunc != nil {
-		return m.ExecuteFunc(repoPath, stdout, args...)
+		return m.ExecuteFunc(ctx, repoPath, stdout, args...)
 	}
 	return []byte("mock response"), nil
 }
@@ -72,7 +73,7 @@ func TestRepositoryWithMockExecutor(t *testing.T) {
 
 	// Create a mock executor with custom behavior
 	mockExecutor := &MockGitCommandExecutor{
-		ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
+		ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
 			// Check if the command is "status"
 			if len(args) > 0 && args[0] == "status" {
 				return []byte("M  README.md"), nil
@@ -100,7 +101,7 @@ func TestRepositoryWithMockExecutor(t *testing.T) {
 	repo.Path = "/mock/path"
 
 	// Test Status method with mock
-	status, err := repo.Status()
+	status, err := repo.Status(context.Background())
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
@@ -121,7 +122,7 @@ func TestRepositoryWithErrorMock(t *testing.T) {
 
 	// Create a mock executor that always returns an error
 	mockExecutor := &MockGitCommandExecutor{
-		ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
+		ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
 			return nil, errors.New("mock error")
 		},
 	}
@@ -133,7 +134,7 @@ func TestRepositoryWithErrorMock(t *testing.T) {
 	repo.Path = "/mock/path"
 
 	// Test Status method with mock
-	_, err := repo.Status()
+	_, err := repo.Status(context.Background())
 	if err == nil {
 		t.Fatal("Expected an error, got nil")
 	}
@@ -150,7 +151,7 @@ func TestRepositoryWithNonExistentPath(t *testing.T) {
 	repo.Path = "/non/existent/path"
 
 	// Test Status method with mock
-	_, err := repo.Status()
+	_, err := repo.Status(context.Background())
 	if err == nil {
 		t.Fatal("Expected an error for non-existent path, got nil")
 	}
@@ -270,7 +271,7 @@ func TestClone(t *testing.T) {
 	// Test successful clone
 	t.Run("Successful clone", func(t *testing.T) {
 		mockExecutor := &MockGitCommandExecutor{
-			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
 				// Verify the clone command is correct
 				if len(args) < 2 || args[0] != "clone" {
 					t.Errorf("Expected clone command, got: %v", args)
@@ -280,7 +281,7 @@ func TestClone(t *testing.T) {
 		}
 
 		repo.SetGitCommandExecutor(mockExecutor)
-		err := repo.Clone("/tmp", "git@github.com:octocat/hello-world.git", []string{})
+		err := repo.Clone(context.Background(), "/tmp", "git@github.com:octocat/hello-world.git", []string{})
 		if err != nil {
 			t.Errorf("Clone() error = %v, want nil", err)
 		}
@@ -295,7 +296,7 @@ func TestClone(t *testing.T) {
 	// Test clone with options
 	t.Run("Clone with options", func(t *testing.T) {
 		mockExecutor := &MockGitCommandExecutor{
-			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
 				// Verify the clone command includes the options
 				if len(args) < 3 || args[0] != "clone" || args[1] != "--depth=1" {
 					t.Errorf("Expected clone command with --depth=1 option, got: %v", args)
@@ -305,7 +306,7 @@ func TestClone(t *testing.T) {
 		}
 
 		repo.SetGitCommandExecutor(mockExecutor)
-		err := repo.Clone("/tmp", "git@github.com:octocat/hello-world.git", []string{"--depth=1"})
+		err := repo.Clone(context.Background(), "/tmp", "git@github.com:octocat/hello-world.git", []string{"--depth=1"})
 		if err != nil {
 			t.Errorf("Clone() error = %v, want nil", err)
 		}
@@ -314,13 +315,13 @@ func TestClone(t *testing.T) {
 	// Test clone error
 	t.Run("Clone error", func(t *testing.T) {
 		mockExecutor := &MockGitCommandExecutor{
-			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
 				return nil, errors.New("clone failed")
 			},
 		}
 
 		repo.SetGitCommandExecutor(mockExecutor)
-		err := repo.Clone("/tmp", "git@github.com:octocat/hello-world.git", []string{})
+		err := repo.Clone(context.Background(), "/tmp", "git@github.com:octocat/hello-world.git", []string{})
 		if err == nil {
 			t.Error("Clone() error = nil, want error")
 		}
@@ -345,7 +346,7 @@ func TestUpdate(t *testing.T) {
 		pullErr error,
 	) *MockGitCommandExecutor {
 		return &MockGitCommandExecutor{
-			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
 				if len(args) == 0 {
 					return nil, fmt.Errorf("unexpected empty command")
 				}
@@ -377,7 +378,7 @@ func TestUpdate(t *testing.T) {
 	t.Run("Fetch only", func(t *testing.T) {
 		repo := newRepo()
 		repo.SetGitCommandExecutor(stdMock("main", nil, "", "* main [origin/main]", nil))
-		result, err := repo.Update(true, false)
+		result, err := repo.Update(context.Background(), true, false)
 		if err != nil {
 			t.Errorf("Update() error = %v, want nil", err)
 		}
@@ -393,7 +394,7 @@ func TestUpdate(t *testing.T) {
 		repo := newRepo()
 		var seenPrune, seenAll bool
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
-			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
 				if args[0] == "fetch" {
 					for _, a := range args {
 						if a == "--prune" {
@@ -405,10 +406,10 @@ func TestUpdate(t *testing.T) {
 					}
 					return []byte(""), nil
 				}
-				return stdMock("main", nil, "", "* main [origin/main]", nil).ExecuteFunc(repoPath, stdout, args...)
+				return stdMock("main", nil, "", "* main [origin/main]", nil).ExecuteFunc(ctx, repoPath, stdout, args...)
 			},
 		})
-		_, err := repo.Update(true, true)
+		_, err := repo.Update(context.Background(), true, true)
 		if err != nil {
 			t.Errorf("Update() error = %v, want nil", err)
 		}
@@ -425,7 +426,7 @@ func TestUpdate(t *testing.T) {
 		// feature is behind remote — pull should be called
 		repo.SetGitCommandExecutor(stdMock("main", nil, "",
 			"* main [origin/main]\n  feature [origin/feature: behind 2]", nil))
-		result, err := repo.Update(false, false)
+		result, err := repo.Update(context.Background(), false, false)
 		if err != nil {
 			t.Errorf("Update() error = %v, want nil", err)
 		}
@@ -439,7 +440,7 @@ func TestUpdate(t *testing.T) {
 	t.Run("Update with uncommitted changes", func(t *testing.T) {
 		repo := newRepo()
 		repo.SetGitCommandExecutor(stdMock("main", nil, "M  README.md", "* main [origin/main]", nil))
-		_, err := repo.Update(false, false)
+		_, err := repo.Update(context.Background(), false, false)
 		if err == nil {
 			t.Error("Update() error = nil, want error about uncommitted changes")
 		}
@@ -448,7 +449,7 @@ func TestUpdate(t *testing.T) {
 	t.Run("Fetch error", func(t *testing.T) {
 		repo := newRepo()
 		repo.SetGitCommandExecutor(stdMock("main", errors.New("fetch failed"), "", "* main [origin/main]", nil))
-		_, err := repo.Update(true, false)
+		_, err := repo.Update(context.Background(), true, false)
 		if err == nil {
 			t.Error("Update() error = nil, want fetch error")
 		}
@@ -459,7 +460,7 @@ func TestUpdate(t *testing.T) {
 		// main is current and behind — pull is invoked and fails
 		repo.SetGitCommandExecutor(stdMock("main", nil, "",
 			"* main [origin/main: behind 1]", errors.New("pull failed")))
-		result, err := repo.Update(false, false)
+		result, err := repo.Update(context.Background(), false, false)
 		if err != nil {
 			t.Errorf("Update() unexpected top-level error = %v", err)
 		}
@@ -479,7 +480,7 @@ func TestPruneBranches(t *testing.T) {
 	// Test prune branches with gone remotes
 	t.Run("Prune branches with gone remotes", func(t *testing.T) {
 		mockExecutor := &MockGitCommandExecutor{
-			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
 				if len(args) > 0 && args[0] == "status" {
 					return []byte(""), nil
 				}
@@ -511,7 +512,7 @@ func TestPruneBranches(t *testing.T) {
 		}
 
 		repo.Repository.SetGitCommandExecutor(mockExecutor)
-		branches, err := repo.Repository.PruneBranches(true, false, false, false)
+		branches, err := repo.Repository.PruneBranches(context.Background(), true, false, false, false)
 		if err != nil {
 			t.Errorf("PruneBranches() error = %v, want nil", err)
 		}
@@ -523,7 +524,7 @@ func TestPruneBranches(t *testing.T) {
 	// Test prune merged branches
 	t.Run("Prune merged branches", func(t *testing.T) {
 		mockExecutor := &MockGitCommandExecutor{
-			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
 				if len(args) > 0 && args[0] == "status" {
 					return []byte(""), nil
 				}
@@ -558,7 +559,7 @@ func TestPruneBranches(t *testing.T) {
 		}
 
 		repo.Repository.SetGitCommandExecutor(mockExecutor)
-		branches, err := repo.Repository.PruneBranches(false, true, false, false)
+		branches, err := repo.Repository.PruneBranches(context.Background(), false, true, false, false)
 		if err != nil {
 			t.Errorf("PruneBranches() error = %v, want nil", err)
 		}
@@ -570,7 +571,7 @@ func TestPruneBranches(t *testing.T) {
 	// Test dry run
 	t.Run("Dry run", func(t *testing.T) {
 		mockExecutor := &MockGitCommandExecutor{
-			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
 				if len(args) > 0 && args[0] == "status" {
 					return []byte(""), nil
 				}
@@ -600,7 +601,7 @@ func TestPruneBranches(t *testing.T) {
 		}
 
 		repo.Repository.SetGitCommandExecutor(mockExecutor)
-		branches, err := repo.Repository.PruneBranches(true, false, true, false)
+		branches, err := repo.Repository.PruneBranches(context.Background(), true, false, true, false)
 		if err != nil {
 			t.Errorf("PruneBranches() error = %v, want nil", err)
 		}
@@ -612,7 +613,7 @@ func TestPruneBranches(t *testing.T) {
 	// Test error getting repository status
 	t.Run("Error getting repository status", func(t *testing.T) {
 		mockExecutor := &MockGitCommandExecutor{
-			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
 				if len(args) > 0 && args[0] == "status" {
 					return nil, errors.New("status failed")
 				}
@@ -621,7 +622,7 @@ func TestPruneBranches(t *testing.T) {
 		}
 
 		repo.Repository.SetGitCommandExecutor(mockExecutor)
-		_, err := repo.Repository.PruneBranches(true, false, false, false)
+		_, err := repo.Repository.PruneBranches(context.Background(), true, false, false, false)
 		if err == nil {
 			t.Error("PruneBranches() error = nil, want error")
 		}
@@ -630,7 +631,7 @@ func TestPruneBranches(t *testing.T) {
 	// Test error deleting branch
 	t.Run("Error deleting branch", func(t *testing.T) {
 		mockExecutor := &MockGitCommandExecutor{
-			ExecuteFunc: func(repoPath string, stdout bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
 				if len(args) > 0 && args[0] == "status" {
 					return []byte(""), nil
 				}
@@ -659,7 +660,7 @@ func TestPruneBranches(t *testing.T) {
 		}
 
 		repo.Repository.SetGitCommandExecutor(mockExecutor)
-		_, err := repo.Repository.PruneBranches(true, false, false, false)
+		_, err := repo.Repository.PruneBranches(context.Background(), true, false, false, false)
 		if err == nil {
 			t.Error("PruneBranches() error = nil, want error")
 		}
@@ -713,11 +714,11 @@ func TestGetCurrentBranch(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
-			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
 				return []byte("feature\n"), nil
 			},
 		})
-		branch, err := repo.Repository.GetCurrentBranch()
+		branch, err := repo.Repository.GetCurrentBranch(context.Background())
 		if err != nil {
 			t.Fatalf("GetCurrentBranch() error = %v, want nil", err)
 		}
@@ -728,11 +729,11 @@ func TestGetCurrentBranch(t *testing.T) {
 
 	t.Run("error", func(t *testing.T) {
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
-			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
 				return nil, errors.New("not a git repo")
 			},
 		})
-		_, err := repo.Repository.GetCurrentBranch()
+		_, err := repo.Repository.GetCurrentBranch(context.Background())
 		if err == nil {
 			t.Error("GetCurrentBranch() error = nil, want error")
 		}
@@ -746,12 +747,12 @@ func TestCheckout(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		var gotArgs []string
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
-			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
 				gotArgs = args
 				return nil, nil
 			},
 		})
-		if err := repo.Repository.Checkout("main"); err != nil {
+		if err := repo.Repository.Checkout(context.Background(), "main"); err != nil {
 			t.Fatalf("Checkout() error = %v, want nil", err)
 		}
 		if len(gotArgs) < 2 || gotArgs[0] != "checkout" || gotArgs[1] != "main" {
@@ -761,11 +762,11 @@ func TestCheckout(t *testing.T) {
 
 	t.Run("error", func(t *testing.T) {
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
-			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
 				return nil, errors.New("branch not found")
 			},
 		})
-		if err := repo.Repository.Checkout("nonexistent"); err == nil {
+		if err := repo.Repository.Checkout(context.Background(), "nonexistent"); err == nil {
 			t.Error("Checkout() error = nil, want error")
 		}
 	})
@@ -777,14 +778,14 @@ func TestGetDefaultBranch(t *testing.T) {
 
 	t.Run("main exists", func(t *testing.T) {
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
-			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
 				if args[0] == "show-ref" && args[len(args)-1] == "refs/heads/main" {
 					return nil, nil // main exists
 				}
 				return nil, errors.New("unexpected")
 			},
 		})
-		branch, err := repo.Repository.GetDefaultBranch()
+		branch, err := repo.Repository.GetDefaultBranch(context.Background())
 		if err != nil {
 			t.Fatalf("GetDefaultBranch() error = %v, want nil", err)
 		}
@@ -795,7 +796,7 @@ func TestGetDefaultBranch(t *testing.T) {
 
 	t.Run("master fallback", func(t *testing.T) {
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
-			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
 				if args[0] == "show-ref" {
 					if args[len(args)-1] == "refs/heads/main" {
 						return nil, exitError(1) // main absent
@@ -807,7 +808,7 @@ func TestGetDefaultBranch(t *testing.T) {
 				return nil, errors.New("unexpected")
 			},
 		})
-		branch, err := repo.Repository.GetDefaultBranch()
+		branch, err := repo.Repository.GetDefaultBranch(context.Background())
 		if err != nil {
 			t.Fatalf("GetDefaultBranch() error = %v, want nil", err)
 		}
@@ -818,7 +819,7 @@ func TestGetDefaultBranch(t *testing.T) {
 
 	t.Run("fallback to current branch", func(t *testing.T) {
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
-			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
 				if args[0] == "show-ref" {
 					return nil, exitError(1) // neither main nor master
 				}
@@ -828,7 +829,7 @@ func TestGetDefaultBranch(t *testing.T) {
 				return nil, errors.New("unexpected")
 			},
 		})
-		branch, err := repo.Repository.GetDefaultBranch()
+		branch, err := repo.Repository.GetDefaultBranch(context.Background())
 		if err != nil {
 			t.Fatalf("GetDefaultBranch() error = %v, want nil", err)
 		}
@@ -839,11 +840,11 @@ func TestGetDefaultBranch(t *testing.T) {
 
 	t.Run("real error on main check", func(t *testing.T) {
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
-			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
 				return nil, errors.New("network error")
 			},
 		})
-		_, err := repo.Repository.GetDefaultBranch()
+		_, err := repo.Repository.GetDefaultBranch(context.Background())
 		if err == nil {
 			t.Error("GetDefaultBranch() error = nil, want error")
 		}
@@ -851,14 +852,14 @@ func TestGetDefaultBranch(t *testing.T) {
 
 	t.Run("real error on master check", func(t *testing.T) {
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
-			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
 				if args[0] == "show-ref" && args[len(args)-1] == "refs/heads/main" {
 					return nil, exitError(1)
 				}
 				return nil, errors.New("disk error")
 			},
 		})
-		_, err := repo.Repository.GetDefaultBranch()
+		_, err := repo.Repository.GetDefaultBranch(context.Background())
 		if err == nil {
 			t.Error("GetDefaultBranch() error = nil, want error")
 		}
@@ -875,7 +876,7 @@ func TestMarkStaleBranches(t *testing.T) {
 
 	t.Run("marks old branch stale, skips default branch", func(t *testing.T) {
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
-			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
 				if args[0] == "for-each-ref" {
 					oldDate := old.Format("2006-01-02 15:04:05 -0700")
 					return []byte("main " + oldDate + "\nfeature " + oldDate), nil
@@ -897,7 +898,7 @@ func TestMarkStaleBranches(t *testing.T) {
 			},
 		}
 
-		if err := repo.Repository.MarkStaleBranches(status, threshold); err != nil {
+		if err := repo.Repository.MarkStaleBranches(context.Background(), status, threshold); err != nil {
 			t.Fatalf("MarkStaleBranches() error = %v", err)
 		}
 
@@ -918,12 +919,12 @@ func TestMarkStaleBranches(t *testing.T) {
 
 	t.Run("for-each-ref error propagates", func(t *testing.T) {
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
-			ExecuteFunc: func(_ string, _ bool, args ...string) ([]byte, error) {
+			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
 				return nil, errors.New("git error")
 			},
 		})
 		status := &RepositoryStatus{}
-		if err := repo.Repository.MarkStaleBranches(status, threshold); err == nil {
+		if err := repo.Repository.MarkStaleBranches(context.Background(), status, threshold); err == nil {
 			t.Error("MarkStaleBranches() error = nil, want error")
 		}
 	})

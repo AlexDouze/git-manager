@@ -2,6 +2,7 @@
 package git
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,7 +14,7 @@ import (
 
 // GitCommandExecutor defines an interface for executing git commands
 type GitCommandExecutor interface {
-	Execute(repoPath string, stdout bool, args ...string) ([]byte, error)
+	Execute(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error)
 }
 
 // DefaultGitCommandExecutor is the default implementation of GitCommandExecutor
@@ -22,7 +23,8 @@ type DefaultGitCommandExecutor struct{}
 // Execute executes a git command with the given arguments.
 // If stdout is true, the command streams output directly to the terminal (used for interactive commands like clone).
 // If stdout is false, stdout and stderr are both captured; on error the output is included in the ExitError.
-func (e *DefaultGitCommandExecutor) Execute(repoPath string, stdout bool, args ...string) ([]byte, error) {
+// The command is bound to ctx, so cancelling ctx terminates the underlying git process.
+func (e *DefaultGitCommandExecutor) Execute(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
 	// Insert the repository path argument if provided
 	if repoPath != "" {
 		if len(args) > 0 {
@@ -34,7 +36,7 @@ func (e *DefaultGitCommandExecutor) Execute(repoPath string, stdout bool, args .
 		}
 	}
 
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
 
 	if stdout {
 		cmd.Stdout = os.Stdout
@@ -72,13 +74,13 @@ func (r *Repository) SetGitCommandExecutor(executor GitCommandExecutor) {
 }
 
 // execGitCommand is a helper method that uses the GitCommandExecutor
-func (r *Repository) execGitCommand(stdout bool, args ...string) ([]byte, error) {
+func (r *Repository) execGitCommand(ctx context.Context, stdout bool, args ...string) ([]byte, error) {
 	// Initialize with default executor if not set
 	if r.gitExecutor == nil {
 		r.gitExecutor = &DefaultGitCommandExecutor{}
 	}
 
-	return r.gitExecutor.Execute(r.Path, stdout, args...)
+	return r.gitExecutor.Execute(ctx, r.Path, stdout, args...)
 }
 
 // ParseURL parses a git URL and extracts host, organization, and repository name
@@ -127,7 +129,7 @@ func ParseURL(url string) (*Repository, error) {
 }
 
 // Clone clones a repository to the specified root directory
-func (r *Repository) Clone(rootDir, url string, options []string) error {
+func (r *Repository) Clone(ctx context.Context, rootDir, url string, options []string) error {
 	r.Path = filepath.Join(rootDir, r.Host, r.Organization, r.Name)
 
 	// Create parent directories
@@ -146,12 +148,12 @@ func (r *Repository) Clone(rootDir, url string, options []string) error {
 	args := append([]string{"clone"}, options...)
 	args = append(args, url, r.Path)
 
-	_, err := r.execGitCommand(true, args...)
+	_, err := r.execGitCommand(ctx, true, args...)
 	return err
 }
 
 // Status gets the status of the repository
-func (r *Repository) Status() (*RepositoryStatus, error) {
+func (r *Repository) Status(ctx context.Context) (*RepositoryStatus, error) {
 	status := &RepositoryStatus{
 		Repository: r,
 	}
@@ -162,17 +164,17 @@ func (r *Repository) Status() (*RepositoryStatus, error) {
 	}
 
 	// Get uncommitted changes
-	if err := r.getUncommittedChanges(status); err != nil {
+	if err := r.getUncommittedChanges(ctx, status); err != nil {
 		return nil, fmt.Errorf("failed to get uncommitted changes: %w", err)
 	}
 
 	// Get branch information
-	if err := r.getBranchInformation(status); err != nil {
+	if err := r.getBranchInformation(ctx, status); err != nil {
 		return nil, fmt.Errorf("failed to get branch information: %w", err)
 	}
 
 	// Check for stashes
-	if err := r.getStashInformation(status); err != nil {
+	if err := r.getStashInformation(ctx, status); err != nil {
 		return nil, fmt.Errorf("failed to get stash information: %w", err)
 	}
 
@@ -180,8 +182,8 @@ func (r *Repository) Status() (*RepositoryStatus, error) {
 }
 
 // getUncommittedChanges populates the uncommitted changes information
-func (r *Repository) getUncommittedChanges(status *RepositoryStatus) error {
-	output, err := r.execGitCommand(false, "status", "--porcelain")
+func (r *Repository) getUncommittedChanges(ctx context.Context, status *RepositoryStatus) error {
+	output, err := r.execGitCommand(ctx, false, "status", "--porcelain")
 	if err != nil {
 		return err
 	}
@@ -195,8 +197,8 @@ func (r *Repository) getUncommittedChanges(status *RepositoryStatus) error {
 }
 
 // getBranchInformation populates the branch information
-func (r *Repository) getBranchInformation(status *RepositoryStatus) error {
-	output, err := r.execGitCommand(false, "branch", "-vv")
+func (r *Repository) getBranchInformation(ctx context.Context, status *RepositoryStatus) error {
+	output, err := r.execGitCommand(ctx, false, "branch", "-vv")
 	if err != nil {
 		return err
 	}
@@ -227,8 +229,8 @@ func (r *Repository) getBranchInformation(status *RepositoryStatus) error {
 }
 
 // getStashInformation populates the stash information
-func (r *Repository) getStashInformation(status *RepositoryStatus) error {
-	output, err := r.execGitCommand(false, "stash", "list")
+func (r *Repository) getStashInformation(ctx context.Context, status *RepositoryStatus) error {
+	output, err := r.execGitCommand(ctx, false, "stash", "list")
 	if err != nil {
 		return err
 	}
@@ -259,9 +261,9 @@ type PruneResult struct {
 }
 
 // Update updates the repository (fetch and optionally pull)
-func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
+func (r *Repository) Update(ctx context.Context, fetchOnly, prune bool) (*UpdateResult, error) {
 	// Save the current branch to restore it at the end
-	originalBranch, err := r.GetCurrentBranch()
+	originalBranch, err := r.GetCurrentBranch(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current branch: %w", err)
 	}
@@ -272,7 +274,7 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 		fetchArgs = append(fetchArgs, "--prune")
 	}
 
-	_, err = r.execGitCommand(false, fetchArgs...)
+	_, err = r.execGitCommand(ctx, false, fetchArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch: %w", err)
 	}
@@ -282,7 +284,7 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 
 	if !fetchOnly {
 		// Check for uncommitted changes before pulling
-		status, err := r.Status()
+		status, err := r.Status(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get repository status: %w", err)
 		}
@@ -290,7 +292,7 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 			return nil, errors.New("cannot update: repository has uncommitted changes")
 		}
 
-		output, err := r.execGitCommand(false, "branch", "-vv")
+		output, err := r.execGitCommand(ctx, false, "branch", "-vv")
 		if err != nil {
 			return nil, err
 		}
@@ -315,7 +317,7 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 
 				// Checkout the branch
 				if branch.Name != originalBranch {
-					err = r.Checkout(branch.Name)
+					err = r.Checkout(ctx, branch.Name)
 					if err != nil {
 						results[branch.Name] = BranchUpdateResult{
 							Branch: branch,
@@ -327,7 +329,7 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 				}
 
 				// Pull changes for the branch
-				_, err = r.execGitCommand(false, "pull", "--rebase")
+				_, err = r.execGitCommand(ctx, false, "pull", "--rebase")
 
 				results[branch.Name] = BranchUpdateResult{
 					Branch: branch,
@@ -342,7 +344,7 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 
 		// Restore the original branch
 		if originalBranch != "" {
-			err = r.Checkout(originalBranch)
+			err = r.Checkout(ctx, originalBranch)
 			if err != nil {
 				return &UpdateResult{
 					Repository:          r,
@@ -363,17 +365,17 @@ func (r *Repository) Update(fetchOnly, prune bool) (*UpdateResult, error) {
 // PruneBranches prunes branches based on criteria
 // By default, it will prune the current branch if its remote is gone by checking out the default branch first
 // Set noPruneCurrent to true to disable pruning the current branch
-func (r *Repository) PruneBranches(goneOnly, mergedOnly bool, dryRun bool, noPruneCurrent bool) ([]string, error) {
+func (r *Repository) PruneBranches(ctx context.Context, goneOnly, mergedOnly bool, dryRun bool, noPruneCurrent bool) ([]string, error) {
 	var branchesToPrune []string
 
 	// Get branch information
-	status, err := r.Status()
+	status, err := r.Status(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get repository status: %w", err)
 	}
 
 	// Determine which branches to prune (by default allow pruning current branch)
-	branchesToPrune, err = r.identifyBranchesToPrune(status, goneOnly, mergedOnly, !noPruneCurrent)
+	branchesToPrune, err = r.identifyBranchesToPrune(ctx, status, goneOnly, mergedOnly, !noPruneCurrent)
 	if err != nil {
 		return nil, err
 	}
@@ -394,7 +396,7 @@ func (r *Repository) PruneBranches(goneOnly, mergedOnly bool, dryRun bool, noPru
 
 			// If current branch needs to be pruned, checkout default branch first
 			if currentBranchToPrune {
-				defaultBranch, err := r.GetDefaultBranch()
+				defaultBranch, err := r.GetDefaultBranch(ctx)
 				if err != nil {
 					return nil, fmt.Errorf("failed to determine default branch: %w", err)
 				}
@@ -405,7 +407,7 @@ func (r *Repository) PruneBranches(goneOnly, mergedOnly bool, dryRun bool, noPru
 				}
 
 				// Checkout the default branch
-				err = r.Checkout(defaultBranch)
+				err = r.Checkout(ctx, defaultBranch)
 				if err != nil {
 					return nil, fmt.Errorf("failed to checkout default branch '%s' before pruning current branch: %w", defaultBranch, err)
 				}
@@ -414,7 +416,7 @@ func (r *Repository) PruneBranches(goneOnly, mergedOnly bool, dryRun bool, noPru
 
 		// Now delete the branches
 		for _, branch := range branchesToPrune {
-			_, err := r.execGitCommand(false, "branch", "-D", branch)
+			_, err := r.execGitCommand(ctx, false, "branch", "-D", branch)
 			if err != nil {
 				return branchesToPrune, fmt.Errorf("failed to delete branch %s: %w", branch, err)
 			}
@@ -425,9 +427,9 @@ func (r *Repository) PruneBranches(goneOnly, mergedOnly bool, dryRun bool, noPru
 }
 
 // GetDefaultBranch returns the default branch name (main or master)
-func (r *Repository) GetDefaultBranch() (string, error) {
+func (r *Repository) GetDefaultBranch(ctx context.Context) (string, error) {
 	// First check if main branch exists
-	_, err := r.execGitCommand(false, "show-ref", "--verify", "--quiet", "refs/heads/main")
+	_, err := r.execGitCommand(ctx, false, "show-ref", "--verify", "--quiet", "refs/heads/main")
 	if err == nil {
 		return "main", nil
 	}
@@ -437,7 +439,7 @@ func (r *Repository) GetDefaultBranch() (string, error) {
 	}
 
 	// Then check if master branch exists
-	_, err = r.execGitCommand(false, "show-ref", "--verify", "--quiet", "refs/heads/master")
+	_, err = r.execGitCommand(ctx, false, "show-ref", "--verify", "--quiet", "refs/heads/master")
 	if err == nil {
 		return "master", nil
 	}
@@ -446,13 +448,13 @@ func (r *Repository) GetDefaultBranch() (string, error) {
 	}
 
 	// If neither exists, return the current branch as a fallback
-	return r.GetCurrentBranch()
+	return r.GetCurrentBranch(ctx)
 }
 
 // populateBranchCommitDates fetches the last commit date for each local branch
 // using a single git for-each-ref call and maps the dates onto the status branches.
-func (r *Repository) populateBranchCommitDates(status *RepositoryStatus) error {
-	output, err := r.execGitCommand(false, "for-each-ref",
+func (r *Repository) populateBranchCommitDates(ctx context.Context, status *RepositoryStatus) error {
+	output, err := r.execGitCommand(ctx, false, "for-each-ref",
 		"--format=%(refname:short) %(committerdate:iso8601)",
 		"refs/heads/")
 	if err != nil {
@@ -490,14 +492,14 @@ func (r *Repository) populateBranchCommitDates(status *RepositoryStatus) error {
 // MarkStaleBranches populates commit dates and marks branches as stale based on
 // the given threshold. The default branch is excluded. For each stale branch,
 // it also computes the number of commits it is behind the default branch.
-func (r *Repository) MarkStaleBranches(status *RepositoryStatus, threshold time.Duration) error {
-	if err := r.populateBranchCommitDates(status); err != nil {
+func (r *Repository) MarkStaleBranches(ctx context.Context, status *RepositoryStatus, threshold time.Duration) error {
+	if err := r.populateBranchCommitDates(ctx, status); err != nil {
 		return fmt.Errorf("failed to get branch commit dates: %w", err)
 	}
 
 	status.StaleBranchThreshold = threshold
 
-	defaultBranch, err := r.GetDefaultBranch()
+	defaultBranch, err := r.GetDefaultBranch(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get default branch: %w", err)
 	}
@@ -513,7 +515,7 @@ func (r *Repository) MarkStaleBranches(status *RepositoryStatus, threshold time.
 		status.HasStaleBranches = true
 
 		// Count commits behind the default branch
-		out, err := r.execGitCommand(false, "rev-list", "--count", branch.Name+".."+defaultBranch)
+		out, err := r.execGitCommand(ctx, false, "rev-list", "--count", branch.Name+".."+defaultBranch)
 		if err == nil {
 			count := strings.TrimSpace(string(out))
 			n := 0
@@ -526,11 +528,11 @@ func (r *Repository) MarkStaleBranches(status *RepositoryStatus, threshold time.
 }
 
 // identifyBranchesToPrune determines which branches should be pruned based on criteria
-func (r *Repository) identifyBranchesToPrune(status *RepositoryStatus, goneOnly, mergedOnly bool, pruneCurrent bool) ([]string, error) {
+func (r *Repository) identifyBranchesToPrune(ctx context.Context, status *RepositoryStatus, goneOnly, mergedOnly bool, pruneCurrent bool) ([]string, error) {
 	var branchesToPrune []string
 
 	// Get the default branch
-	defaultBranch, err := r.GetDefaultBranch()
+	defaultBranch, err := r.GetDefaultBranch(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to determine default branch: %w", err)
 	}
@@ -538,7 +540,7 @@ func (r *Repository) identifyBranchesToPrune(status *RepositoryStatus, goneOnly,
 	// Build merged branch set once (avoid calling git per branch)
 	mergedBranchSet := make(map[string]bool)
 	if mergedOnly {
-		output, err := r.execGitCommand(false, "branch", "--merged", defaultBranch)
+		output, err := r.execGitCommand(ctx, false, "branch", "--merged", defaultBranch)
 		if err == nil {
 			for _, mb := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 				mb = strings.TrimSpace(mb)
@@ -685,8 +687,8 @@ func parseBranchInfo(line string) *BranchInfo {
 }
 
 // GetCurrentBranch gets the current branch name
-func (r *Repository) GetCurrentBranch() (string, error) {
-	output, err := r.execGitCommand(false, "rev-parse", "--abbrev-ref", "HEAD")
+func (r *Repository) GetCurrentBranch(ctx context.Context) (string, error) {
+	output, err := r.execGitCommand(ctx, false, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("failed to get current branch: %w", err)
 	}
@@ -695,9 +697,9 @@ func (r *Repository) GetCurrentBranch() (string, error) {
 }
 
 // Checkout checks out a branch
-func (r *Repository) Checkout(branchOrArgs ...string) error {
+func (r *Repository) Checkout(ctx context.Context, branchOrArgs ...string) error {
 	args := append([]string{"checkout"}, branchOrArgs...)
-	_, err := r.execGitCommand(false, args...)
+	_, err := r.execGitCommand(ctx, false, args...)
 	if err != nil {
 		return fmt.Errorf("failed to checkout: %w", err)
 	}

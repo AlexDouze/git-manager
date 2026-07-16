@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -14,7 +15,7 @@ type MockGithubCommandExecutor struct {
 }
 
 // Execute records the arguments and returns the mock output and error
-func (m *MockGithubCommandExecutor) Execute(args ...string) ([]byte, error) {
+func (m *MockGithubCommandExecutor) Execute(ctx context.Context, args ...string) ([]byte, error) {
 	m.CalledWith = args
 	return m.MockOutput, m.MockError
 }
@@ -53,7 +54,7 @@ func TestListGitHubRepositoriesWithExecutor(t *testing.T) {
 	}
 
 	// Call the function with the mock executor
-	repos, err := ListGitHubRepositoriesWithExecutor("user1", mockExecutor)
+	repos, err := ListGitHubRepositoriesWithExecutor(context.Background(), "user1", mockExecutor)
 
 	// Verify there was no error
 	if err != nil {
@@ -93,7 +94,7 @@ func TestListGitHubRepositoriesWithExecutorNoOwner(t *testing.T) {
 	}
 
 	// Call the function with no owner
-	_, err := ListGitHubRepositoriesWithExecutor("", mockExecutor)
+	_, err := ListGitHubRepositoriesWithExecutor(context.Background(), "", mockExecutor)
 
 	// Verify there was no error
 	if err != nil {
