@@ -57,18 +57,19 @@ release:
   draft: false
   name_template: "v{{ .Version }}"
 
-brews:
+homebrew_casks:
   - name: gitm
     repository:
       owner: alexdouze
       name: homebrew-tap
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/alexDouze/git-manager"
-    directory: Formula
     description: "Git Manager CLI tool"
-    extra_install: |
-      chmod 0555, bin/"gitm"
-      generate_completions_from_executable(bin/"gitm", "completion")
-    license: "MIT"
-    test: |
-      system "#{bin}/gitm", "version"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/gitm"]
+          end
+    generate_completions_from_executable:
+      shell_parameter_format: cobra
