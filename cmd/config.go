@@ -23,7 +23,7 @@ var configInitCmd = &cobra.Command{
 		if err := config.InitConfig(); err != nil {
 			return fmt.Errorf("failed to initialize configuration: %w", err)
 		}
-		
+
 		fmt.Printf("Configuration initialized at %s\n", viper.ConfigFileUsed())
 		return nil
 	},
@@ -40,19 +40,19 @@ var configGetCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("failed to load configuration: %w", err)
 			}
-			
+
 			fmt.Printf("rootDirectory: %s\n", cfg.RootDirectory)
 			fmt.Printf("clone.defaultOptions: %s\n", cfg.Clone.DefaultOptions)
 			return nil
 		}
-		
+
 		// Show specific configuration key
 		key := args[0]
 		value := viper.Get(key)
 		if value == nil {
 			return fmt.Errorf("configuration key not found: %s", key)
 		}
-		
+
 		fmt.Printf("%s: %v\n", key, value)
 		return nil
 	},
@@ -66,12 +66,12 @@ var configSetCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		key := args[0]
 		value := args[1]
-		
+
 		viper.Set(key, value)
 		if err := viper.WriteConfig(); err != nil {
 			return fmt.Errorf("failed to write configuration: %w", err)
 		}
-		
+
 		fmt.Printf("Set %s to %s\n", key, value)
 		return nil
 	},

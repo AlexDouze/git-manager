@@ -931,9 +931,9 @@ func TestMarkStaleBranches(t *testing.T) {
 
 func TestParseBranchInfo(t *testing.T) {
 	tests := []struct {
-		name    string
-		line    string
-		want    *BranchInfo
+		name string
+		line string
+		want *BranchInfo
 	}{
 		{
 			name: "current branch with tracking",

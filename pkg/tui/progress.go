@@ -9,7 +9,7 @@ import (
 )
 
 // Progress is a lightweight TTY-aware progress counter. It writes to stderr
-// so that stdout remains clean for piped usage. When stdout is not a TTY,
+// so that stdout remains clean for piped usage. When stderr is not a TTY,
 // it becomes a no-op.
 type Progress struct {
 	label     string

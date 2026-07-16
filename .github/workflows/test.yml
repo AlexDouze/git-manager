@@ -23,5 +23,11 @@ jobs:
           go-version: '1.24'
           cache: true
 
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)" || (echo "The following files are not gofmt-clean:"; gofmt -l .; exit 1)
+
+      - name: Vet
+        run: go vet ./...
+
       - name: Run tests
         run: go test -v ./...
