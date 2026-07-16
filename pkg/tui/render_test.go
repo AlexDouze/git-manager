@@ -3,37 +3,28 @@ package tui
 import (
 	"bytes"
 	"errors"
-	"io"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/alexDouze/gitm/pkg/git"
-	"github.com/fatih/color"
 )
 
-// captureStdout redirects os.Stdout and color.Output for the duration of f and
+// captureStdout redirects the line renderers' output for the duration of f and
 // returns what was written. Colors are disabled for predictable text matching.
 func captureStdout(f func()) string {
-	origStdout := os.Stdout
-	origColorOutput := color.Output
-	origNoColor := color.NoColor
+	origOut := out
+	origForceASCII := forceASCII
 
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-	color.Output = w
-	color.NoColor = true
+	var buf bytes.Buffer
+	SetOutput(&buf)
+	SetNoColor(true)
 
 	f()
 
-	w.Close()
-	os.Stdout = origStdout
-	color.Output = origColorOutput
-	color.NoColor = origNoColor
+	SetOutput(origOut)
+	forceASCII = origForceASCII
 
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
 	return buf.String()
 }
 

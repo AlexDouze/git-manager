@@ -12,6 +12,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/alexDouze/gitm/pkg/config"
 	"github.com/alexDouze/gitm/pkg/git"
@@ -562,9 +563,20 @@ func (m Model) View() tea.View {
 	return v
 }
 
-// Run launches the interactive app and blocks until the user quits.
-func Run(ctx context.Context, cfg *config.Config, f Filter) error {
-	p := tea.NewProgram(New(ctx, cfg, f), tea.WithContext(ctx))
+// Run launches the interactive app and blocks until the user quits. noColor
+// forces the ASCII color profile so styling is stripped (mirrors --no-color).
+func Run(ctx context.Context, cfg *config.Config, f Filter, noColor bool) error {
+	p := tea.NewProgram(New(ctx, cfg, f), programOpts(ctx, noColor)...)
 	_, err := p.Run()
 	return err
+}
+
+// programOpts builds the shared Bubble Tea program options: context binding and,
+// when noColor is set, a forced ASCII color profile.
+func programOpts(ctx context.Context, noColor bool) []tea.ProgramOption {
+	opts := []tea.ProgramOption{tea.WithContext(ctx)}
+	if noColor {
+		opts = append(opts, tea.WithColorProfile(colorprofile.Ascii))
+	}
+	return opts
 }
