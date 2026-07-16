@@ -198,18 +198,13 @@ func (r *Repository) getUncommittedChanges(ctx context.Context, status *Reposito
 
 // getBranchInformation populates the branch information
 func (r *Repository) getBranchInformation(ctx context.Context, status *RepositoryStatus) error {
-	output, err := r.execGitCommand(ctx, false, "branch", "-vv")
+	branches, err := r.ListBranches(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Parse branch output sequentially for deterministic ordering
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		branch := parseBranchInfo(line)
-		if branch == nil {
-			continue
-		}
-		status.Branches = append(status.Branches, *branch)
+	for _, branch := range branches {
+		status.Branches = append(status.Branches, branch)
 
 		if branch.Current {
 			status.CurrentBranch = branch.Name
@@ -268,6 +263,16 @@ func (r *Repository) Update(ctx context.Context, fetchOnly, prune bool) (*Update
 		return nil, fmt.Errorf("failed to get current branch: %w", err)
 	}
 
+	// Detached HEAD: GetCurrentBranch reports "HEAD". Resolve the commit SHA so
+	// we can restore the exact commit after checking out branches to pull them.
+	if originalBranch == "HEAD" {
+		sha, err := r.execGitCommand(ctx, false, "rev-parse", "HEAD")
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve detached HEAD: %w", err)
+		}
+		originalBranch = strings.TrimSpace(string(sha))
+	}
+
 	// Fetch from all remotes
 	fetchArgs := []string{"fetch", "--all"}
 	if prune {
@@ -292,22 +297,19 @@ func (r *Repository) Update(ctx context.Context, fetchOnly, prune bool) (*Update
 			return nil, errors.New("cannot update: repository has uncommitted changes")
 		}
 
-		output, err := r.execGitCommand(ctx, false, "branch", "-vv")
+		branches, err := r.ListBranches(ctx)
 		if err != nil {
 			return nil, err
 		}
 
-		// Parse branch output
-		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-
 		// Process each branch sequentially (can't do parallel checkouts)
-		for _, line := range lines {
-			branch := parseBranchInfo(line)
-			if branch != nil && !branch.NoRemoteTracking && !branch.RemoteGone {
+		for i := range branches {
+			branch := branches[i]
+			if !branch.NoRemoteTracking && !branch.RemoteGone {
 				// Skip branches that are not behind
 				if branch.Behind <= 0 {
 					results[branch.Name] = BranchUpdateResult{
-						Branch: branch,
+						Branch: &branch,
 						Err:    nil,
 					}
 					continue
@@ -320,7 +322,7 @@ func (r *Repository) Update(ctx context.Context, fetchOnly, prune bool) (*Update
 					err = r.Checkout(ctx, branch.Name)
 					if err != nil {
 						results[branch.Name] = BranchUpdateResult{
-							Branch: branch,
+							Branch: &branch,
 							Err:    fmt.Errorf("failed to checkout branch: %w", err),
 						}
 						hasError = true
@@ -332,7 +334,7 @@ func (r *Repository) Update(ctx context.Context, fetchOnly, prune bool) (*Update
 				_, err = r.execGitCommand(ctx, false, "pull", "--rebase")
 
 				results[branch.Name] = BranchUpdateResult{
-					Branch: branch,
+					Branch: &branch,
 					Err:    err,
 				}
 
@@ -451,52 +453,12 @@ func (r *Repository) GetDefaultBranch(ctx context.Context) (string, error) {
 	return r.GetCurrentBranch(ctx)
 }
 
-// populateBranchCommitDates fetches the last commit date for each local branch
-// using a single git for-each-ref call and maps the dates onto the status branches.
-func (r *Repository) populateBranchCommitDates(ctx context.Context, status *RepositoryStatus) error {
-	output, err := r.execGitCommand(ctx, false, "for-each-ref",
-		"--format=%(refname:short) %(committerdate:iso8601)",
-		"refs/heads/")
-	if err != nil {
-		return err
-	}
-
-	dateMap := make(map[string]time.Time)
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		spaceIdx := strings.Index(line, " ")
-		if spaceIdx == -1 {
-			continue
-		}
-		branchName := line[:spaceIdx]
-		dateStr := strings.TrimSpace(line[spaceIdx:])
-		t, parseErr := time.Parse("2006-01-02 15:04:05 -0700", dateStr)
-		if parseErr != nil {
-			continue
-		}
-		dateMap[branchName] = t
-	}
-
-	for i := range status.Branches {
-		if date, ok := dateMap[status.Branches[i].Name]; ok {
-			status.Branches[i].LastCommitDate = date
-		}
-	}
-
-	return nil
-}
-
-// MarkStaleBranches populates commit dates and marks branches as stale based on
-// the given threshold. The default branch is excluded. For each stale branch,
-// it also computes the number of commits it is behind the default branch.
+// MarkStaleBranches marks branches as stale based on the given threshold.
+// Commit dates come from ListBranches (already populated on status.Branches when
+// Status was called), so this needs no extra git call to fetch dates. The default
+// branch is excluded. For each stale branch, it also computes the number of commits
+// it is behind the default branch.
 func (r *Repository) MarkStaleBranches(ctx context.Context, status *RepositoryStatus, threshold time.Duration) error {
-	if err := r.populateBranchCommitDates(ctx, status); err != nil {
-		return fmt.Errorf("failed to get branch commit dates: %w", err)
-	}
-
 	status.StaleBranchThreshold = threshold
 
 	defaultBranch, err := r.GetDefaultBranch(ctx)
@@ -513,6 +475,7 @@ func (r *Repository) MarkStaleBranches(ctx context.Context, status *RepositorySt
 			continue
 		}
 		status.HasStaleBranches = true
+		status.Branches[i].Stale = true
 
 		// Count commits behind the default branch
 		out, err := r.execGitCommand(ctx, false, "rev-list", "--count", branch.Name+".."+defaultBranch)
@@ -594,6 +557,8 @@ type BranchInfo struct {
 	Behind               int       // Number of commits behind remote
 	LastCommitDate       time.Time // Date of the last commit on this branch
 	CommitsBehindDefault int       // Number of commits behind the default branch
+	Stale                bool      // Whether this branch is considered stale
+	WorktreePath         string    // Path of the worktree that has this branch checked out, if any
 }
 
 // RepositoryStatus contains the status information of a repository
@@ -615,72 +580,89 @@ func (s RepositoryStatus) HasIssues() bool {
 	return s.HasUncommittedChanges || s.HasBranchesWithoutRemote || s.HasBranchesWithRemoteGone || s.HasBranchesBehindRemote || s.HasStaleBranches
 }
 
-// parseBranchInfo parses a line from git branch -vv output
-func parseBranchInfo(line string) *BranchInfo {
-	line = strings.TrimSpace(line)
-	if line == "" {
+// branchRefFormat is the for-each-ref format used by ListBranches. Fields are
+// separated by NUL (%00) because that byte is illegal in git refnames, so it can
+// never collide with branch names, upstream names, or worktree paths (unlike ' '
+// or '|', which are all legal in refnames). for-each-ref interpolates %00 into an
+// actual NUL byte. Fields, in order:
+//
+//	refname:short, HEAD marker, upstream:short, upstream:track, committerdate, worktreepath
+const branchRefFormat = "%(refname:short)%00%(HEAD)%00%(upstream:short)%00%(upstream:track)%00%(committerdate:iso8601-strict)%00%(worktreepath)"
+
+// ListBranches returns information about every local branch using a single
+// for-each-ref call. This replaces parsing "git branch -vv" porcelain, whose
+// output is ambiguous: a commit subject containing brackets (e.g. "[fix] ..."
+// or the word "gone") could be misread as tracking info and wrongly flag a
+// branch as RemoteGone — a data-loss hazard when pruning. for-each-ref exposes
+// each attribute in its own field, so no such ambiguity exists.
+func (r *Repository) ListBranches(ctx context.Context) ([]BranchInfo, error) {
+	output, err := r.execGitCommand(ctx, false, "for-each-ref",
+		"--format="+branchRefFormat, "refs/heads/")
+	if err != nil {
+		return nil, err
+	}
+
+	var branches []BranchInfo
+	for _, line := range strings.Split(string(output), "\n") {
+		branch := parseBranchRefLine(line)
+		if branch == nil {
+			continue
+		}
+		branches = append(branches, *branch)
+	}
+
+	return branches, nil
+}
+
+// parseBranchRefLine parses a single NUL-separated line produced by
+// branchRefFormat. It is pure and table-testable. Returns nil for blank or
+// malformed lines.
+func parseBranchRefLine(line string) *BranchInfo {
+	if strings.TrimSpace(line) == "" {
 		return nil
 	}
 
-	branch := &BranchInfo{}
+	fields := strings.Split(line, "\x00")
+	if len(fields) < 6 {
+		return nil
+	}
 
-	// Check if this is the current branch
-	if strings.HasPrefix(line, "* ") {
-		branch.Current = true
-		line = strings.TrimPrefix(line, "* ")
+	name := fields[0]
+	if name == "" {
+		return nil
+	}
+
+	branch := &BranchInfo{
+		Name:           name,
+		Current:        fields[1] == "*",
+		RemoteTracking: fields[2],
+		WorktreePath:   fields[5],
+	}
+
+	// upstream:track is one of: "" (in sync), "[gone]", "[ahead N]",
+	// "[behind M]", or "[ahead N, behind M]".
+	track := fields[3]
+	if strings.Contains(track, "gone") {
+		branch.RemoteGone = true
 	} else {
-		line = strings.TrimPrefix(line, "  ")
-	}
-
-	// Extract branch name (first word)
-	spaceIndex := strings.Index(line, " ")
-	if spaceIndex == -1 {
-		return nil
-	}
-
-	branch.Name = line[:spaceIndex]
-	line = strings.TrimSpace(line[spaceIndex:])
-
-	// Look for tracking information between square brackets
-	trackingInfoFound := false
-	startIdx := strings.Index(line, "[")
-	endIdx := strings.Index(line, "]")
-
-	if startIdx != -1 && endIdx != -1 && endIdx > startIdx {
-		trackingInfoFound = true
-		trackInfo := line[startIdx+1 : endIdx]
-
-		if strings.Contains(trackInfo, "gone") {
-			branch.RemoteGone = true
-		} else {
-			// Extract remote tracking branch
-			colonIndex := strings.Index(trackInfo, ":")
-			if colonIndex != -1 {
-				branch.RemoteTracking = strings.TrimSpace(trackInfo[:colonIndex])
-
-				// Parse ahead/behind information
-				statusInfo := trackInfo[colonIndex+1:]
-
-				// Check for ahead
-				aheadIdx := strings.Index(statusInfo, "ahead")
-				if aheadIdx != -1 {
-					fmt.Sscanf(statusInfo[aheadIdx:], "ahead %d", &branch.Ahead)
-				}
-
-				// Check for behind
-				behindIdx := strings.Index(statusInfo, "behind")
-				if behindIdx != -1 {
-					fmt.Sscanf(statusInfo[behindIdx:], "behind %d", &branch.Behind)
-				}
-			} else {
-				branch.RemoteTracking = strings.TrimSpace(trackInfo)
-			}
+		if idx := strings.Index(track, "ahead "); idx != -1 {
+			fmt.Sscanf(track[idx:], "ahead %d", &branch.Ahead)
+		}
+		if idx := strings.Index(track, "behind "); idx != -1 {
+			fmt.Sscanf(track[idx:], "behind %d", &branch.Behind)
 		}
 	}
 
-	// If no tracking info was found
-	if !trackingInfoFound && branch.RemoteTracking == "" {
+	// A branch with no configured upstream has an empty upstream:short field.
+	if branch.RemoteTracking == "" {
 		branch.NoRemoteTracking = true
+	}
+
+	// committerdate:iso8601-strict is RFC3339-compatible.
+	if fields[4] != "" {
+		if t, err := time.Parse(time.RFC3339, fields[4]); err == nil {
+			branch.LastCommitDate = t
+		}
 	}
 
 	return branch

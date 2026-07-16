@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
@@ -79,9 +80,10 @@ func TestRepositoryWithMockExecutor(t *testing.T) {
 				return []byte("M  README.md"), nil
 			}
 
-			// Check if the command is "branch"
-			if len(args) > 0 && args[0] == "branch" {
-				return []byte("* main\n  feature"), nil
+			// Branch information now comes from for-each-ref
+			if len(args) > 0 && args[0] == "for-each-ref" {
+				return []byte(refLine("main", "*", "", "", "", "") + "\n" +
+					refLine("feature", "", "", "", "", "")), nil
 			}
 
 			// Check if the command is "stash list"
@@ -338,6 +340,8 @@ func TestUpdate(t *testing.T) {
 	}
 
 	// stdMock builds a mock executor with configurable responses per command.
+	// branchOutput is a for-each-ref formatted string (NUL-separated fields,
+	// newline-separated branches) as produced by refLine.
 	stdMock := func(
 		revParse string,
 		fetchErr error,
@@ -357,10 +361,8 @@ func TestUpdate(t *testing.T) {
 					return []byte(""), fetchErr
 				case "status":
 					return []byte(statusOutput), nil
-				case "branch":
-					if len(args) > 1 && args[1] == "-vv" {
-						return []byte(branchOutput), nil
-					}
+				case "for-each-ref":
+					return []byte(branchOutput), nil
 				case "stash":
 					if len(args) > 1 && args[1] == "list" {
 						return []byte(""), nil
@@ -377,7 +379,7 @@ func TestUpdate(t *testing.T) {
 
 	t.Run("Fetch only", func(t *testing.T) {
 		repo := newRepo()
-		repo.SetGitCommandExecutor(stdMock("main", nil, "", "* main [origin/main]", nil))
+		repo.SetGitCommandExecutor(stdMock("main", nil, "", refLine("main", "*", "origin/main", "", "", ""), nil))
 		result, err := repo.Update(context.Background(), true, false)
 		if err != nil {
 			t.Errorf("Update() error = %v, want nil", err)
@@ -406,7 +408,7 @@ func TestUpdate(t *testing.T) {
 					}
 					return []byte(""), nil
 				}
-				return stdMock("main", nil, "", "* main [origin/main]", nil).ExecuteFunc(ctx, repoPath, stdout, args...)
+				return stdMock("main", nil, "", refLine("main", "*", "origin/main", "", "", ""), nil).ExecuteFunc(ctx, repoPath, stdout, args...)
 			},
 		})
 		_, err := repo.Update(context.Background(), true, true)
@@ -425,7 +427,8 @@ func TestUpdate(t *testing.T) {
 		repo := newRepo()
 		// feature is behind remote — pull should be called
 		repo.SetGitCommandExecutor(stdMock("main", nil, "",
-			"* main [origin/main]\n  feature [origin/feature: behind 2]", nil))
+			refLine("main", "*", "origin/main", "", "", "")+"\n"+
+				refLine("feature", "", "origin/feature", "[behind 2]", "", ""), nil))
 		result, err := repo.Update(context.Background(), false, false)
 		if err != nil {
 			t.Errorf("Update() error = %v, want nil", err)
@@ -439,7 +442,7 @@ func TestUpdate(t *testing.T) {
 
 	t.Run("Update with uncommitted changes", func(t *testing.T) {
 		repo := newRepo()
-		repo.SetGitCommandExecutor(stdMock("main", nil, "M  README.md", "* main [origin/main]", nil))
+		repo.SetGitCommandExecutor(stdMock("main", nil, "M  README.md", refLine("main", "*", "origin/main", "", "", ""), nil))
 		_, err := repo.Update(context.Background(), false, false)
 		if err == nil {
 			t.Error("Update() error = nil, want error about uncommitted changes")
@@ -448,7 +451,7 @@ func TestUpdate(t *testing.T) {
 
 	t.Run("Fetch error", func(t *testing.T) {
 		repo := newRepo()
-		repo.SetGitCommandExecutor(stdMock("main", errors.New("fetch failed"), "", "* main [origin/main]", nil))
+		repo.SetGitCommandExecutor(stdMock("main", errors.New("fetch failed"), "", refLine("main", "*", "origin/main", "", "", ""), nil))
 		_, err := repo.Update(context.Background(), true, false)
 		if err == nil {
 			t.Error("Update() error = nil, want fetch error")
@@ -459,7 +462,7 @@ func TestUpdate(t *testing.T) {
 		repo := newRepo()
 		// main is current and behind — pull is invoked and fails
 		repo.SetGitCommandExecutor(stdMock("main", nil, "",
-			"* main [origin/main: behind 1]", errors.New("pull failed")))
+			refLine("main", "*", "origin/main", "[behind 1]", "", ""), errors.New("pull failed")))
 		result, err := repo.Update(context.Background(), false, false)
 		if err != nil {
 			t.Errorf("Update() unexpected top-level error = %v", err)
@@ -468,6 +471,48 @@ func TestUpdate(t *testing.T) {
 			t.Error("Update() result = nil, want non-nil")
 		} else if !result.HasErrors {
 			t.Error("Update() result.HasErrors = false, want true (pull failed)")
+		}
+	})
+
+	t.Run("Detached HEAD restores the commit SHA", func(t *testing.T) {
+		repo := newRepo()
+		const detachedSHA = "abc123def456"
+		var lastCheckout string
+		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
+			ExecuteFunc: func(ctx context.Context, repoPath string, stdout bool, args ...string) ([]byte, error) {
+				switch args[0] {
+				case "rev-parse":
+					// GetCurrentBranch uses --abbrev-ref and reports HEAD when detached;
+					// Update then resolves the bare SHA.
+					if len(args) > 1 && args[1] == "--abbrev-ref" {
+						return []byte("HEAD\n"), nil
+					}
+					return []byte(detachedSHA + "\n"), nil
+				case "fetch":
+					return []byte(""), nil
+				case "status":
+					return []byte(""), nil
+				case "for-each-ref":
+					// A branch that is behind, forcing a checkout+pull cycle.
+					return []byte(refLine("feature", "", "origin/feature", "[behind 1]", "", "")), nil
+				case "stash":
+					return []byte(""), nil
+				case "pull":
+					return []byte(""), nil
+				case "checkout":
+					lastCheckout = args[len(args)-1]
+					return []byte(""), nil
+				}
+				return nil, fmt.Errorf("unexpected command: %v", args)
+			},
+		})
+
+		_, err := repo.Update(context.Background(), false, false)
+		if err != nil {
+			t.Fatalf("Update() error = %v, want nil", err)
+		}
+		if lastCheckout != detachedSHA {
+			t.Errorf("final checkout arg = %q, want the detached SHA %q", lastCheckout, detachedSHA)
 		}
 	})
 }
@@ -484,10 +529,12 @@ func TestPruneBranches(t *testing.T) {
 				if len(args) > 0 && args[0] == "status" {
 					return []byte(""), nil
 				}
+				if len(args) > 0 && args[0] == "for-each-ref" {
+					return []byte(refLine("main", "*", "origin/main", "", "", "") + "\n" +
+						refLine("feature", "", "origin/feature", "", "", "") + "\n" +
+						refLine("old-feature", "", "origin/old-feature", "[gone]", "", "")), nil
+				}
 				if len(args) > 0 && args[0] == "branch" {
-					if len(args) > 1 && args[1] == "-vv" {
-						return []byte("* main\n  feature [origin/feature]\n  old-feature [origin/old-feature: gone]"), nil
-					}
 					if len(args) > 1 && args[1] == "-D" {
 						if args[2] != "old-feature" {
 							t.Errorf("Expected to delete old-feature, got: %v", args[2])
@@ -528,10 +575,12 @@ func TestPruneBranches(t *testing.T) {
 				if len(args) > 0 && args[0] == "status" {
 					return []byte(""), nil
 				}
+				if len(args) > 0 && args[0] == "for-each-ref" {
+					return []byte(refLine("main", "*", "origin/main", "", "", "") + "\n" +
+						refLine("feature", "", "origin/feature", "", "", "") + "\n" +
+						refLine("merged-feature", "", "origin/merged-feature", "", "", "")), nil
+				}
 				if len(args) > 0 && args[0] == "branch" {
-					if len(args) > 1 && args[1] == "-vv" {
-						return []byte("* main\n  feature [origin/feature]\n  merged-feature [origin/merged-feature]"), nil
-					}
 					if len(args) > 1 && args[1] == "--merged" {
 						return []byte("  feature\n  merged-feature"), nil
 					}
@@ -575,10 +624,12 @@ func TestPruneBranches(t *testing.T) {
 				if len(args) > 0 && args[0] == "status" {
 					return []byte(""), nil
 				}
+				if len(args) > 0 && args[0] == "for-each-ref" {
+					return []byte(refLine("main", "*", "origin/main", "", "", "") + "\n" +
+						refLine("feature", "", "origin/feature", "", "", "") + "\n" +
+						refLine("old-feature", "", "origin/old-feature", "[gone]", "", "")), nil
+				}
 				if len(args) > 0 && args[0] == "branch" {
-					if len(args) > 1 && args[1] == "-vv" {
-						return []byte("* main\n  feature [origin/feature]\n  old-feature [origin/old-feature: gone]"), nil
-					}
 					if len(args) > 1 && args[1] == "-D" {
 						t.Error("Branch deletion should not be called in dry run mode")
 						return nil, errors.New("should not be called")
@@ -635,10 +686,12 @@ func TestPruneBranches(t *testing.T) {
 				if len(args) > 0 && args[0] == "status" {
 					return []byte(""), nil
 				}
+				if len(args) > 0 && args[0] == "for-each-ref" {
+					return []byte(refLine("main", "*", "origin/main", "", "", "") + "\n" +
+						refLine("feature", "", "origin/feature", "", "", "") + "\n" +
+						refLine("old-feature", "", "origin/old-feature", "[gone]", "", "")), nil
+				}
 				if len(args) > 0 && args[0] == "branch" {
-					if len(args) > 1 && args[1] == "-vv" {
-						return []byte("* main\n  feature [origin/feature]\n  old-feature [origin/old-feature: gone]"), nil
-					}
 					if len(args) > 1 && args[1] == "-D" {
 						return nil, errors.New("failed to delete branch")
 					}
@@ -872,20 +925,20 @@ func TestMarkStaleBranches(t *testing.T) {
 
 	now := time.Now()
 	old := now.Add(-60 * 24 * time.Hour)
+	recent := now.Add(-1 * 24 * time.Hour)
 	threshold := 30 * 24 * time.Hour
 
+	// MarkStaleBranches relies on LastCommitDate already being populated on the
+	// branches (ListBranches supplies it via Status); it only calls
+	// GetDefaultBranch (show-ref) and rev-list for the behind count.
 	t.Run("marks old branch stale, skips default branch", func(t *testing.T) {
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
 			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
-				if args[0] == "for-each-ref" {
-					oldDate := old.Format("2006-01-02 15:04:05 -0700")
-					return []byte("main " + oldDate + "\nfeature " + oldDate), nil
-				}
 				if args[0] == "show-ref" && args[len(args)-1] == "refs/heads/main" {
 					return nil, nil
 				}
-				if args[0] == "rev-parse" && args[1] == "--abbrev-ref" {
-					return []byte(""), nil
+				if args[0] == "rev-list" {
+					return []byte("5\n"), nil
 				}
 				return nil, errors.New("unexpected: " + args[0])
 			},
@@ -893,8 +946,9 @@ func TestMarkStaleBranches(t *testing.T) {
 
 		status := &RepositoryStatus{
 			Branches: []BranchInfo{
-				{Name: "main"},
-				{Name: "feature"},
+				{Name: "main", LastCommitDate: old},      // default branch, old but skipped
+				{Name: "feature", LastCommitDate: old},   // stale
+				{Name: "active", LastCommitDate: recent}, // recent, not stale
 			},
 		}
 
@@ -902,35 +956,50 @@ func TestMarkStaleBranches(t *testing.T) {
 			t.Fatalf("MarkStaleBranches() error = %v", err)
 		}
 
-		if status.HasStaleBranches == false {
+		if !status.HasStaleBranches {
 			t.Error("HasStaleBranches = false, want true")
 		}
-		// main is the default branch, should not be marked stale even if old
 		for _, b := range status.Branches {
-			if b.Name == "main" && b.LastCommitDate.IsZero() == false {
-				// main got a date but should NOT count as stale (skipped as default)
-				// the function skips default branch
-			}
-			if b.Name == "feature" && b.LastCommitDate.IsZero() {
-				t.Error("feature should have a commit date")
+			switch b.Name {
+			case "main":
+				if b.Stale {
+					t.Error("main is the default branch and must not be marked stale")
+				}
+			case "feature":
+				if !b.Stale {
+					t.Error("feature is old and should be marked stale")
+				}
+				if b.CommitsBehindDefault != 5 {
+					t.Errorf("feature CommitsBehindDefault = %d, want 5", b.CommitsBehindDefault)
+				}
+			case "active":
+				if b.Stale {
+					t.Error("active is recent and must not be marked stale")
+				}
 			}
 		}
 	})
 
-	t.Run("for-each-ref error propagates", func(t *testing.T) {
+	t.Run("GetDefaultBranch error propagates", func(t *testing.T) {
 		repo.SetGitCommandExecutor(&MockGitCommandExecutor{
 			ExecuteFunc: func(_ context.Context, _ string, _ bool, args ...string) ([]byte, error) {
 				return nil, errors.New("git error")
 			},
 		})
-		status := &RepositoryStatus{}
+		status := &RepositoryStatus{Branches: []BranchInfo{{Name: "feature", LastCommitDate: old}}}
 		if err := repo.Repository.MarkStaleBranches(context.Background(), status, threshold); err == nil {
 			t.Error("MarkStaleBranches() error = nil, want error")
 		}
 	})
 }
 
-func TestParseBranchInfo(t *testing.T) {
+// refLine builds a NUL-separated for-each-ref line matching branchRefFormat:
+// refname, HEAD, upstream:short, upstream:track, committerdate, worktreepath.
+func refLine(name, head, upstream, track, date, worktree string) string {
+	return strings.Join([]string{name, head, upstream, track, date, worktree}, "\x00")
+}
+
+func TestParseBranchRefLine(t *testing.T) {
 	tests := []struct {
 		name string
 		line string
@@ -938,48 +1007,58 @@ func TestParseBranchInfo(t *testing.T) {
 	}{
 		{
 			name: "current branch with tracking",
-			line: "* main [origin/main]",
+			line: refLine("main", "*", "origin/main", "", "", ""),
 			want: &BranchInfo{Name: "main", Current: true, RemoteTracking: "origin/main"},
 		},
 		{
 			name: "non-current branch",
-			line: "  feature [origin/feature]",
+			line: refLine("feature", "", "origin/feature", "", "", ""),
 			want: &BranchInfo{Name: "feature", Current: false, RemoteTracking: "origin/feature"},
 		},
 		{
 			name: "branch behind remote",
-			line: "  develop [origin/develop: behind 3]",
+			line: refLine("develop", "", "origin/develop", "[behind 3]", "", ""),
 			want: &BranchInfo{Name: "develop", RemoteTracking: "origin/develop", Behind: 3},
 		},
 		{
 			name: "branch ahead of remote",
-			line: "  feature [origin/feature: ahead 2]",
+			line: refLine("feature", "", "origin/feature", "[ahead 2]", "", ""),
 			want: &BranchInfo{Name: "feature", RemoteTracking: "origin/feature", Ahead: 2},
 		},
 		{
 			name: "branch ahead and behind",
-			line: "  topic [origin/topic: ahead 1, behind 2]",
+			line: refLine("topic", "", "origin/topic", "[ahead 1, behind 2]", "", ""),
 			want: &BranchInfo{Name: "topic", RemoteTracking: "origin/topic", Ahead: 1, Behind: 2},
 		},
 		{
 			name: "branch with remote gone",
-			line: "  old-feature [origin/old-feature: gone]",
-			want: &BranchInfo{Name: "old-feature", RemoteGone: true},
+			line: refLine("old-feature", "", "origin/old-feature", "[gone]", "", ""),
+			want: &BranchInfo{Name: "old-feature", RemoteTracking: "origin/old-feature", RemoteGone: true},
 		},
 		{
 			name: "current branch with remote gone",
-			line: "* old-main [origin/old-main: gone]",
-			want: &BranchInfo{Name: "old-main", Current: true, RemoteGone: true},
+			line: refLine("old-main", "*", "origin/old-main", "[gone]", "", ""),
+			want: &BranchInfo{Name: "old-main", Current: true, RemoteTracking: "origin/old-main", RemoteGone: true},
 		},
 		{
 			name: "branch without remote tracking",
-			line: "  local-only abc1234 Local branch",
+			line: refLine("local-only", "", "", "", "", ""),
 			want: &BranchInfo{Name: "local-only", NoRemoteTracking: true},
 		},
 		{
 			name: "current branch without remote tracking",
-			line: "* local-main abc1234 Local main",
+			line: refLine("local-main", "*", "", "", "", ""),
 			want: &BranchInfo{Name: "local-main", Current: true, NoRemoteTracking: true},
+		},
+		{
+			name: "branch literally named with brackets and gone in subject is safe",
+			line: refLine("feature/[gone]", "", "", "", "", ""),
+			want: &BranchInfo{Name: "feature/[gone]", NoRemoteTracking: true},
+		},
+		{
+			name: "branch checked out in a worktree",
+			line: refLine("wt", "", "origin/wt", "", "", "/home/user/wt"),
+			want: &BranchInfo{Name: "wt", RemoteTracking: "origin/wt", WorktreePath: "/home/user/wt"},
 		},
 		{
 			name: "empty line returns nil",
@@ -991,19 +1070,24 @@ func TestParseBranchInfo(t *testing.T) {
 			line: "   ",
 			want: nil,
 		},
+		{
+			name: "malformed line (too few fields) returns nil",
+			line: "just-a-name\x00*",
+			want: nil,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseBranchInfo(tt.line)
+			got := parseBranchRefLine(tt.line)
 			if tt.want == nil {
 				if got != nil {
-					t.Errorf("parseBranchInfo(%q) = %+v, want nil", tt.line, got)
+					t.Errorf("parseBranchRefLine(%q) = %+v, want nil", tt.line, got)
 				}
 				return
 			}
 			if got == nil {
-				t.Fatalf("parseBranchInfo(%q) = nil, want %+v", tt.line, tt.want)
+				t.Fatalf("parseBranchRefLine(%q) = nil, want %+v", tt.line, tt.want)
 			}
 			if got.Name != tt.want.Name {
 				t.Errorf("Name = %q, want %q", got.Name, tt.want.Name)
@@ -1025,6 +1109,9 @@ func TestParseBranchInfo(t *testing.T) {
 			}
 			if got.Behind != tt.want.Behind {
 				t.Errorf("Behind = %d, want %d", got.Behind, tt.want.Behind)
+			}
+			if got.WorktreePath != tt.want.WorktreePath {
+				t.Errorf("WorktreePath = %q, want %q", got.WorktreePath, tt.want.WorktreePath)
 			}
 		})
 	}
