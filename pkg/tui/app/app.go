@@ -52,6 +52,10 @@ type Model struct {
 	activeRepo *git.Repository // the repo whose branches are shown
 	branchBusy bool            // async branch load in flight
 
+	confirm   *confirmState // orthogonal yes/no overlay; intercepts keys when set
+	footer    string        // last op result shown in the footer line
+	footerErr bool          // render the footer as an error (red) when true
+
 	styles styles
 
 	width  int
@@ -137,15 +141,71 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.setBranches(msg.branches)
+
+	case opDoneMsg:
+		return m.handleOpDone(msg)
 	}
 
 	return m.updateActiveList(msg)
+}
+
+// handleOpDone folds a completed mutating action back into the model: it sets
+// the footer summary and, on success, refreshes the affected view. A safe
+// branch delete that was refused as "not fully merged" is turned into a
+// force-delete confirm overlay instead of an error.
+func (m Model) handleOpDone(msg opDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.notFullyMerged {
+		r := m.repoByPath(msg.path)
+		if r == nil {
+			r = m.activeRepo
+		}
+		if r != nil {
+			m.confirm = &confirmState{
+				prompt:    msg.branch + " is not fully merged. Force delete?",
+				onConfirm: deleteBranchCmd(m.ctx, r, msg.branch, true),
+			}
+			return m, nil
+		}
+	}
+
+	m.footer = msg.summary
+	m.footerErr = msg.err != nil
+	if msg.err != nil {
+		return m, nil
+	}
+
+	// On success, re-read the affected repo so its rows/badges reflect the
+	// change. A branch mutation also refreshes the open branch list.
+	var cmds []tea.Cmd
+	if c := m.refreshRepo(msg.path); c != nil {
+		cmds = append(cmds, c)
+	}
+	if m.screen == screenBranches && m.activeRepo != nil && m.activeRepo.Path == msg.path && !m.branchBusy {
+		m.branchBusy = true
+		cmds = append(cmds, m.branches.StartSpinner(), loadBranchesCmd(m.ctx, m.activeRepo))
+	}
+	return m, tea.Batch(cmds...)
 }
 
 // handleKey routes key presses based on the current screen. Keys are always
 // forwarded to the active list afterwards (so navigation/filter still work),
 // except when a shortcut fully handles the press.
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// A confirm overlay is orthogonal: while it is up it owns every key. y runs
+	// the pending command; n/esc dismisses it.
+	if m.confirm != nil {
+		switch msg.String() {
+		case "y":
+			cmd := m.confirm.onConfirm
+			m.confirm = nil
+			return m, cmd
+		case "n", "esc", "ctrl+c":
+			m.confirm = nil
+			return m, nil
+		}
+		return m, nil
+	}
+
 	// While filtering, the active list owns every key (typing into the filter
 	// box, esc to cancel), so no app shortcut fires.
 	if m.activeList().FilterState() == list.Filtering {
@@ -171,10 +231,20 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, m.refresh()
+		case key.Matches(msg, m.repoKeys.Update):
+			return m.updateSelectedRepo()
+		case key.Matches(msg, m.repoKeys.Prune):
+			return m.pruneSelectedRepo()
 		}
 
 	case screenBranches:
 		switch {
+		case key.Matches(msg, m.branchKeys.Checkout):
+			return m.checkoutSelectedBranch()
+		case key.Matches(msg, m.branchKeys.Delete):
+			return m.deleteSelectedBranch()
+		case key.Matches(msg, m.branchKeys.Update):
+			return m.updateActiveRepo()
 		case key.Matches(msg, m.branchKeys.Back):
 			return m.back()
 		case msg.String() == "q":
@@ -228,6 +298,108 @@ func (m Model) back() (tea.Model, tea.Cmd) {
 	m.screen = screenRepos
 	m.activeRepo = nil
 	return m, nil
+}
+
+// updateSelectedRepo fetches+pulls the repo highlighted in the repo list.
+func (m Model) updateSelectedRepo() (tea.Model, tea.Cmd) {
+	sel, ok := m.repos.SelectedItem().(repoItem)
+	if !ok {
+		return m, nil
+	}
+	m.footer = "updating " + sel.repo.Name + "…"
+	m.footerErr = false
+	return m, updateCmd(m.ctx, sel.repo)
+}
+
+// pruneSelectedRepo asks for confirmation, then prunes gone branches in the
+// repo highlighted in the repo list.
+func (m Model) pruneSelectedRepo() (tea.Model, tea.Cmd) {
+	sel, ok := m.repos.SelectedItem().(repoItem)
+	if !ok {
+		return m, nil
+	}
+	m.confirm = &confirmState{
+		prompt:    "Prune gone branches in " + sel.repo.Name + "?",
+		onConfirm: pruneGoneCmd(m.ctx, sel.repo),
+	}
+	return m, nil
+}
+
+// updateActiveRepo fetches+pulls the repo whose branches are being shown.
+func (m Model) updateActiveRepo() (tea.Model, tea.Cmd) {
+	if m.activeRepo == nil {
+		return m, nil
+	}
+	m.footer = "updating " + m.activeRepo.Name + "…"
+	m.footerErr = false
+	return m, updateCmd(m.ctx, m.activeRepo)
+}
+
+// checkoutSelectedBranch checks out the branch highlighted in the branch list.
+func (m Model) checkoutSelectedBranch() (tea.Model, tea.Cmd) {
+	sel, ok := m.branches.SelectedItem().(branchItem)
+	if !ok || m.activeRepo == nil {
+		return m, nil
+	}
+	return m, checkoutCmd(m.ctx, m.activeRepo, sel.branch.Name)
+}
+
+// deleteSelectedBranch attempts a safe delete of the highlighted branch. A
+// branch checked out in a worktree is skipped with a footer note; an unmerged
+// branch surfaces a force-delete confirm via the resulting opDoneMsg.
+func (m Model) deleteSelectedBranch() (tea.Model, tea.Cmd) {
+	sel, ok := m.branches.SelectedItem().(branchItem)
+	if !ok || m.activeRepo == nil {
+		return m, nil
+	}
+	if sel.branch.WorktreePath != "" {
+		m.footer = sel.branch.Name + " is checked out in a worktree; skipped"
+		m.footerErr = true
+		return m, nil
+	}
+	return m, deleteBranchCmd(m.ctx, m.activeRepo, sel.branch.Name, false)
+}
+
+// repoByPath returns the loaded repository with the given path, or nil.
+func (m Model) repoByPath(path string) *git.Repository {
+	idx, ok := m.byPath[path]
+	if !ok {
+		return nil
+	}
+	items := m.repos.Items()
+	if idx >= len(items) {
+		return nil
+	}
+	it, ok := items[idx].(repoItem)
+	if !ok {
+		return nil
+	}
+	return it.repo
+}
+
+// refreshRepo re-reads a single repository's status locally (no fetch) and
+// folds it back into its row. Returns nil if the path is not in the list.
+func (m *Model) refreshRepo(path string) tea.Cmd {
+	idx, ok := m.byPath[path]
+	if !ok {
+		return nil
+	}
+	items := m.repos.Items()
+	if idx >= len(items) {
+		return nil
+	}
+	it, ok := items[idx].(repoItem)
+	if !ok {
+		return nil
+	}
+	r := it.repo
+	it.loaded = false
+	it.status = nil
+	it.loadErr = nil
+	return tea.Batch(
+		m.repos.SetItem(idx, it),
+		loadStatusesCmd(m.ctx, []*git.Repository{r}),
+	)
 }
 
 // setBranches populates the branch list from loaded branch info.
@@ -306,6 +478,14 @@ func (m *Model) refresh() tea.Cmd {
 // the app takes over the full terminal and restores it on quit (v2 replaced the
 // WithAltScreen program option with this field).
 func (m Model) View() tea.View {
+	// A confirm overlay, when present, replaces the whole view — it is a modal
+	// decision the user must resolve before anything else.
+	if m.confirm != nil {
+		v := tea.NewView(confirmView(m.styles, *m.confirm, m.width, m.height))
+		v.AltScreen = true
+		return v
+	}
+
 	var content string
 	switch {
 	case m.err != nil:
@@ -314,6 +494,13 @@ func (m Model) View() tea.View {
 		content = m.branches.View()
 	default:
 		content = m.repos.View()
+	}
+	if m.footer != "" {
+		style := m.styles.footer
+		if m.footerErr {
+			style = m.styles.footerErr
+		}
+		content += "\n" + style.Render(m.footer)
 	}
 	v := tea.NewView(content)
 	v.AltScreen = true

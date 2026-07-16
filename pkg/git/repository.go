@@ -786,6 +786,35 @@ func (r *Repository) Checkout(ctx context.Context, branchOrArgs ...string) error
 	return nil
 }
 
+// ErrBranchNotFullyMerged is returned by DeleteBranch when the safe delete
+// ("git branch -d") refuses a branch because it has commits not merged into its
+// upstream or HEAD. Callers can detect it with errors.Is and retry with
+// force=true (which maps to "git branch -D").
+var ErrBranchNotFullyMerged = errors.New("branch not fully merged")
+
+// DeleteBranch deletes a single local branch by name. With force=false it uses
+// the safe "git branch -d" and returns ErrBranchNotFullyMerged if git refuses
+// because the branch isn't fully merged; force=true uses "git branch -D" and
+// deletes unconditionally. Deleting the current branch or a branch checked out
+// in a worktree fails with git's own error — callers that want to guard against
+// that should check first (see PruneBranches for the batch equivalent).
+func (r *Repository) DeleteBranch(ctx context.Context, name string, force bool) error {
+	deleteFlag := "-d"
+	if force {
+		deleteFlag = "-D"
+	}
+	out, err := r.execGitCommand(ctx, false, "branch", deleteFlag, name)
+	if err != nil {
+		// The captured output is folded into the error by DefaultGitCommandExecutor,
+		// but check both so a mock that returns output on error is handled too.
+		if !force && strings.Contains(string(out)+err.Error(), "not fully merged") {
+			return ErrBranchNotFullyMerged
+		}
+		return fmt.Errorf("failed to delete branch %s: %w", name, err)
+	}
+	return nil
+}
+
 // FilterRepositories filters repositories based on host, org, and repo
 func FilterRepositories(repositories []*Repository, host, org, repo string) []*Repository {
 	if host == "" && org == "" && repo == "" {

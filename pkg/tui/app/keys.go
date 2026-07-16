@@ -9,6 +9,8 @@ import "charm.land/bubbles/v2/key"
 type repoKeyMap struct {
 	Enter   key.Binding
 	Refresh key.Binding
+	Update  key.Binding
+	Prune   key.Binding
 }
 
 func newRepoKeyMap() repoKeyMap {
@@ -21,24 +23,47 @@ func newRepoKeyMap() repoKeyMap {
 			key.WithKeys("r"),
 			key.WithHelp("r", "refresh"),
 		),
+		Update: key.NewBinding(
+			key.WithKeys("u"),
+			key.WithHelp("u", "update"),
+		),
+		Prune: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("p", "prune gone"),
+		),
 	}
 }
 
 // shortHelp returns the app-specific bindings appended to the list's built-in
 // help (navigation/filter/quit).
 func (k repoKeyMap) shortHelp() []key.Binding {
-	return []key.Binding{k.Enter, k.Refresh}
+	return []key.Binding{k.Enter, k.Refresh, k.Update, k.Prune}
 }
 
 // branchKeyMap holds the shortcuts active on the branch-list screen. Navigation,
-// filtering, and quit come from the list component; Back returns to the repo
-// list.
+// filtering, and quit come from the list component; the rest act on the selected
+// branch or the whole repo.
 type branchKeyMap struct {
-	Back key.Binding
+	Checkout key.Binding
+	Delete   key.Binding
+	Update   key.Binding
+	Back     key.Binding
 }
 
 func newBranchKeyMap() branchKeyMap {
 	return branchKeyMap{
+		Checkout: key.NewBinding(
+			key.WithKeys("enter", "c"),
+			key.WithHelp("enter/c", "checkout"),
+		),
+		Delete: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("d", "delete"),
+		),
+		Update: key.NewBinding(
+			key.WithKeys("u"),
+			key.WithHelp("u", "update"),
+		),
 		Back: key.NewBinding(
 			key.WithKeys("esc"),
 			key.WithHelp("esc", "back"),
@@ -47,5 +72,5 @@ func newBranchKeyMap() branchKeyMap {
 }
 
 func (k branchKeyMap) shortHelp() []key.Binding {
-	return []key.Binding{k.Back}
+	return []key.Binding{k.Checkout, k.Delete, k.Update, k.Back}
 }
