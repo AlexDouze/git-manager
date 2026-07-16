@@ -223,6 +223,36 @@ func TestParseURL(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "HTTPS URL with trailing slash",
+			url:  "https://github.com/octocat/hello-world/",
+			want: &Repository{
+				Host:         "github.com",
+				Organization: "octocat",
+				Name:         "hello-world",
+			},
+			wantErr: false,
+		},
+		{
+			name: "SSH URL with GitLab subgroup",
+			url:  "git@gitlab.com:group/sub/repo.git",
+			want: &Repository{
+				Host:         "gitlab.com",
+				Organization: "group/sub",
+				Name:         "repo",
+			},
+			wantErr: false,
+		},
+		{
+			name: "HTTPS URL with GitLab subgroup",
+			url:  "https://gitlab.com/group/sub/repo.git",
+			want: &Repository{
+				Host:         "gitlab.com",
+				Organization: "group/sub",
+				Name:         "repo",
+			},
+			wantErr: false,
+		},
+		{
 			name:    "Invalid SSH URL",
 			url:     "git@github.com",
 			want:    nil,
@@ -262,6 +292,47 @@ func TestParseURL(t *testing.T) {
 				t.Errorf("ParseURL() Name = %v, want %v", got.Name, tt.want.Name)
 			}
 		})
+	}
+}
+
+func TestFindRepositoriesSubgroup(t *testing.T) {
+	rootDir := t.TempDir()
+
+	// Build a tree containing a GitLab-style subgroup: host/group/sub/repo/.git
+	// and a plain github.com/org/repo/.git alongside it.
+	makeRepo := func(segments ...string) {
+		gitDir := filepath.Join(append([]string{rootDir}, append(segments, ".git")...)...)
+		if err := os.MkdirAll(gitDir, 0o755); err != nil {
+			t.Fatalf("failed to create repo dir: %v", err)
+		}
+	}
+	makeRepo("gitlab.com", "group", "sub", "repo")
+	makeRepo("github.com", "octocat", "hello-world")
+
+	repos, err := FindRepositories(rootDir, "", "", "", "")
+	if err != nil {
+		t.Fatalf("FindRepositories() error = %v", err)
+	}
+
+	byName := make(map[string]*Repository)
+	for _, r := range repos {
+		byName[r.Name] = r
+	}
+
+	sub, ok := byName["repo"]
+	if !ok {
+		t.Fatalf("subgroup repo not found; got %d repos", len(repos))
+	}
+	if sub.Host != "gitlab.com" || sub.Organization != "group/sub" {
+		t.Errorf("subgroup repo = %s/%s/%s, want gitlab.com/group/sub/repo", sub.Host, sub.Organization, sub.Name)
+	}
+
+	plain, ok := byName["hello-world"]
+	if !ok {
+		t.Fatal("plain repo not found")
+	}
+	if plain.Host != "github.com" || plain.Organization != "octocat" {
+		t.Errorf("plain repo = %s/%s/%s, want github.com/octocat/hello-world", plain.Host, plain.Organization, plain.Name)
 	}
 }
 
