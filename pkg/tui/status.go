@@ -114,11 +114,12 @@ func formatBranchAge(commitDate time.Time) string {
 
 // getStaleBranchesDisplay formats stale branches with name, age, remote status, and commits behind default.
 func getStaleBranchesDisplay(status *git.RepositoryStatus) string {
-	cutoff := time.Now().Add(-status.StaleBranchThreshold)
 	var parts []string
 
 	for _, branch := range status.Branches {
-		if branch.LastCommitDate.IsZero() || !branch.LastCommitDate.Before(cutoff) {
+		// MarkStaleBranches already decided this (it excludes the default
+		// branch), so filter on the flag rather than re-deriving from dates.
+		if !branch.Stale {
 			continue
 		}
 
