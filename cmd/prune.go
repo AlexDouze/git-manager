@@ -20,6 +20,7 @@ var (
 	dryRun         bool // deprecated, kept for backward compatibility
 	keepCurrent    bool
 	noPruneCurrent bool // deprecated, kept for backward compatibility
+	forceDelete    bool
 )
 
 var pruneCmd = &cobra.Command{
@@ -30,6 +31,10 @@ var pruneCmd = &cobra.Command{
 You can specify to prune only branches with gone remotes, only merged branches, or both.
 By default, this command operates in dry-run mode and only shows what would be deleted.
 Use --execute to actually delete the branches.
+
+Branches are deleted with the safe "git branch -d", which refuses branches that are
+not fully merged; those are reported as skipped. Use --force to delete them anyway
+(equivalent to "git branch -D"). Branches checked out in a linked worktree are always skipped.
 
 By default, the current branch will be pruned if eligible (it will checkout the default branch first).
 Use --keep-current to prevent pruning the current branch.
@@ -43,6 +48,9 @@ Examples:
 
   # Actually prune branches with gone remotes
   gitm prune --all --gone-only --execute
+
+  # Force-delete even branches that are not fully merged
+  gitm prune --all --gone-only --execute --force
 
   # Prune but keep the current branch
   gitm prune --all --gone-only --execute --keep-current
@@ -78,11 +86,19 @@ Examples:
 		// --no-prune-current is the legacy way to keep current; honour it
 		effectiveKeepCurrent := keepCurrent || noPruneCurrent
 
-		return pruneRepositories(cmd.Context(), repositories, isDryRun, effectiveKeepCurrent)
+		opts := git.PruneOptions{
+			GoneOnly:    goneOnly,
+			MergedOnly:  mergedOnly,
+			DryRun:      isDryRun,
+			KeepCurrent: effectiveKeepCurrent,
+			Force:       forceDelete,
+		}
+
+		return pruneRepositories(cmd.Context(), repositories, opts)
 	},
 }
 
-func pruneRepositories(ctx context.Context, repositories []*git.Repository, isDryRun bool, keepCurrentBranch bool) error {
+func pruneRepositories(ctx context.Context, repositories []*git.Repository, opts git.PruneOptions) error {
 	pruneResults := make(map[string]git.PruneResult)
 	var mutex sync.Mutex
 	var wg sync.WaitGroup
@@ -95,33 +111,25 @@ func pruneRepositories(ctx context.Context, repositories []*git.Repository, isDr
 			defer wg.Done()
 			defer prog.Increment()
 
-			result := git.PruneResult{Repository: repo}
-
-			_, err := repo.Status(ctx)
-			if err != nil {
-				result.Error = fmt.Errorf("failed to get status: %w", err)
-				mutex.Lock()
-				pruneResults[repo.Path] = result
-				mutex.Unlock()
-				return
+			// PruneBranches calls Status() itself, so there's no need for a
+			// separate status probe here.
+			result, err := repo.PruneBranches(ctx, opts)
+			if result == nil {
+				result = &git.PruneResult{Repository: repo}
 			}
-
-			prunedBranches, err := repo.PruneBranches(ctx, goneOnly, mergedOnly, isDryRun, keepCurrentBranch)
 			if err != nil {
 				result.Error = fmt.Errorf("failed to prune branches: %w", err)
-			} else {
-				result.PrunedBranches = prunedBranches
 			}
 
 			mutex.Lock()
-			pruneResults[repo.Path] = result
+			pruneResults[repo.Path] = *result
 			mutex.Unlock()
 		}(repo)
 	}
 
 	wg.Wait()
 
-	tui.RenderPruneResults(pruneResults, isDryRun)
+	tui.RenderPruneResults(pruneResults, opts.DryRun)
 	return nil
 }
 
@@ -135,6 +143,8 @@ func init() {
 	pruneCmd.Flags().BoolVar(&mergedOnly, "merged-only", false, "Prune only branches that have been merged")
 
 	pruneCmd.Flags().BoolVar(&execute, "execute", false, "Actually delete branches (default is dry-run)")
+
+	pruneCmd.Flags().BoolVar(&forceDelete, "force", false, "Force-delete branches that are not fully merged (git branch -D)")
 
 	// Deprecated flag kept for backward compatibility
 	pruneCmd.Flags().BoolVar(&dryRun, "dry-run", true, "Show branches that would be pruned without actually pruning them")

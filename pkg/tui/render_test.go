@@ -259,6 +259,29 @@ func TestRenderPruneResults(t *testing.T) {
 			t.Errorf("RenderPruneResults() output = %q, want DRY RUN warning", out)
 		}
 	})
+
+	t.Run("skipped branches shown with reason", func(t *testing.T) {
+		results := map[string]git.PruneResult{
+			"/path": {
+				Repository:     repo,
+				PrunedBranches: []string{"gone-feature"},
+				SkippedBranches: []git.SkippedBranch{
+					{Name: "unmerged", Reason: "not fully merged (use --force)"},
+					{Name: "wt-branch", Reason: "checked out in worktree /tmp/wt"},
+				},
+			},
+		}
+		out := captureStdout(func() { RenderPruneResults(results, false) })
+		if !strings.Contains(out, "Skipped 2 branch") {
+			t.Errorf("RenderPruneResults() output = %q, want skipped count", out)
+		}
+		if !strings.Contains(out, "unmerged (not fully merged (use --force))") {
+			t.Errorf("RenderPruneResults() output = %q, want unmerged skip reason", out)
+		}
+		if !strings.Contains(out, "wt-branch (checked out in worktree /tmp/wt)") {
+			t.Errorf("RenderPruneResults() output = %q, want worktree skip reason", out)
+		}
+	})
 }
 
 func TestUpdateRender(t *testing.T) {
