@@ -59,3 +59,28 @@ type opDoneMsg struct {
 	err            error
 	notFullyMerged bool
 }
+
+// ghReposLoadedMsg carries the result of loadGitHubReposCmd: the repositories
+// listed for an owner via `gh`, or the error that stopped the listing.
+type ghReposLoadedMsg struct {
+	repos []git.Repository
+	err   error
+}
+
+// cloneResult pairs a repository name with the outcome of cloning it.
+type cloneResult struct {
+	name string
+	path string
+	err  error
+}
+
+// ghCloneDoneMsg carries the results of a clone batch, one entry per selected
+// repository.
+type ghCloneDoneMsg struct {
+	results []cloneResult
+}
+
+// ghExitMsg asks the app to leave the GitHub browser. When the browser is
+// embedded in the main app it returns to the repo list (and reloads, since new
+// clones may have appeared); when run standalone it quits the program.
+type ghExitMsg struct{}

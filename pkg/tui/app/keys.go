@@ -11,6 +11,7 @@ type repoKeyMap struct {
 	Refresh key.Binding
 	Update  key.Binding
 	Prune   key.Binding
+	Clone   key.Binding
 }
 
 func newRepoKeyMap() repoKeyMap {
@@ -31,13 +32,17 @@ func newRepoKeyMap() repoKeyMap {
 			key.WithKeys("p"),
 			key.WithHelp("p", "prune gone"),
 		),
+		Clone: key.NewBinding(
+			key.WithKeys("c"),
+			key.WithHelp("c", "clone"),
+		),
 	}
 }
 
 // shortHelp returns the app-specific bindings appended to the list's built-in
 // help (navigation/filter/quit).
 func (k repoKeyMap) shortHelp() []key.Binding {
-	return []key.Binding{k.Enter, k.Refresh, k.Update, k.Prune}
+	return []key.Binding{k.Enter, k.Refresh, k.Update, k.Prune, k.Clone}
 }
 
 // branchKeyMap holds the shortcuts active on the branch-list screen. Navigation,
@@ -73,4 +78,34 @@ func newBranchKeyMap() branchKeyMap {
 
 func (k branchKeyMap) shortHelp() []key.Binding {
 	return []key.Binding{k.Checkout, k.Delete, k.Update, k.Back}
+}
+
+// ghKeyMap holds the shortcuts active on the GitHub clone browser's list phase.
+// Navigation and filtering come from the list component; these act on the
+// selection set or the browser as a whole.
+type ghKeyMap struct {
+	Toggle key.Binding
+	Clone  key.Binding
+	Back   key.Binding
+}
+
+func newGHKeyMap() ghKeyMap {
+	return ghKeyMap{
+		Toggle: key.NewBinding(
+			key.WithKeys(" "),
+			key.WithHelp("space", "select"),
+		),
+		Clone: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "clone"),
+		),
+		Back: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("esc", "back"),
+		),
+	}
+}
+
+func (k ghKeyMap) shortHelp() []key.Binding {
+	return []key.Binding{k.Toggle, k.Clone, k.Back}
 }
