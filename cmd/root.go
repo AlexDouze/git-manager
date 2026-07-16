@@ -12,6 +12,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/alexDouze/gitm/pkg/config"
+	"github.com/alexDouze/gitm/pkg/git"
 	"github.com/alexDouze/gitm/pkg/tui"
 	"github.com/alexDouze/gitm/pkg/tui/app"
 )
@@ -57,12 +58,23 @@ prune, and clone.`,
 			return fmt.Errorf("failed to load configuration: %w", err)
 		}
 
+		// With no explicit filter, launching from inside a managed repo should
+		// drop straight into that repo's branch view instead of the full list.
+		var initialPath string
+		if rootFilters.empty() {
+			if cwd, err := os.Getwd(); err == nil {
+				if root, ok := git.FindRepoRoot(cwd); ok {
+					initialPath = root
+				}
+			}
+		}
+
 		return app.Run(cmd.Context(), cfg, app.Filter{
 			Host: rootFilters.Host,
 			Org:  rootFilters.Org,
 			Repo: rootFilters.Repo,
 			Path: rootFilters.Path,
-		}, noColor)
+		}, initialPath, noColor)
 	},
 }
 

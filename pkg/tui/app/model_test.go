@@ -61,7 +61,7 @@ func newRepo(name string) *git.Repository {
 func seededModel(t *testing.T, names ...string) Model {
 	t.Helper()
 	cfg := &config.Config{RootDirectory: "/root"}
-	m := New(context.Background(), cfg, Filter{})
+	m := New(context.Background(), cfg, Filter{}, "")
 
 	tm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = tm.(Model)
@@ -93,7 +93,7 @@ func TestInitialLoadPopulatesRepos(t *testing.T) {
 
 func TestReposLoadedError(t *testing.T) {
 	cfg := &config.Config{RootDirectory: "/root"}
-	m := New(context.Background(), cfg, Filter{})
+	m := New(context.Background(), cfg, Filter{}, "")
 
 	tm, _ := m.Update(reposLoadedMsg{err: errors.New("walk failed")})
 	m = tm.(Model)
@@ -138,6 +138,58 @@ func TestDrillInNoSelectionIsNoop(t *testing.T) {
 	m = tm.(Model)
 	if m.screen != screenRepos {
 		t.Errorf("screen = %d, want screenRepos when list is empty", m.screen)
+	}
+}
+
+// autoDrillModel builds a Model seeded with autoDrillPath, sized to a real
+// window, and feeds it reposLoadedMsg for the given repo names.
+func autoDrillModel(t *testing.T, autoDrillPath string, names ...string) Model {
+	t.Helper()
+	cfg := &config.Config{RootDirectory: "/root"}
+	m := New(context.Background(), cfg, Filter{}, autoDrillPath)
+
+	tm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = tm.(Model)
+
+	repos := make([]*git.Repository, 0, len(names))
+	for _, n := range names {
+		repos = append(repos, newRepo(n))
+	}
+	tm, _ = m.Update(reposLoadedMsg{repos: repos})
+	return tm.(Model)
+}
+
+func TestAutoDrillIntoCwdRepo(t *testing.T) {
+	m := autoDrillModel(t, "/root/github.com/org/alpha", "alpha", "beta")
+
+	if m.screen != screenBranches {
+		t.Fatalf("screen = %d, want screenBranches", m.screen)
+	}
+	if m.activeRepo == nil || m.activeRepo.Name != "alpha" {
+		t.Fatalf("activeRepo = %v, want alpha", m.activeRepo)
+	}
+	if !m.branchBusy {
+		t.Error("branchBusy should be true after auto-drill")
+	}
+	if m.autoDrillPath != "" {
+		t.Error("autoDrillPath should be consumed after auto-drill")
+	}
+
+	tm, _ := m.Update(keyPress("esc"))
+	m = tm.(Model)
+	if m.screen != screenRepos {
+		t.Errorf("screen = %d, want screenRepos after esc", m.screen)
+	}
+}
+
+func TestAutoDrillNoMatchShowsList(t *testing.T) {
+	m := autoDrillModel(t, "/root/github.com/org/nonexistent", "alpha", "beta")
+
+	if m.screen != screenRepos {
+		t.Errorf("screen = %d, want screenRepos when auto-drill path matches nothing", m.screen)
+	}
+	if m.autoDrillPath != "" {
+		t.Error("autoDrillPath should still be consumed even when it matches nothing")
 	}
 }
 

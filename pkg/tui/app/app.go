@@ -73,10 +73,16 @@ type Model struct {
 
 	loading bool // initial repository walk in flight
 	err     error
+
+	// autoDrillPath, when set, is the repo the app should jump straight into
+	// once the initial repository load completes (e.g. gitm was launched from
+	// inside that repo's directory). Consumed after the first reposLoadedMsg.
+	autoDrillPath string
 }
 
-// New builds the root model.
-func New(ctx context.Context, cfg *config.Config, f Filter) Model {
+// New builds the root model. autoDrillPath, if non-empty, drills straight into
+// that repository's branch view once the initial repo load completes.
+func New(ctx context.Context, cfg *config.Config, f Filter, autoDrillPath string) Model {
 	st := newStyles()
 	repoKeys := newRepoKeyMap()
 	branchKeys := newBranchKeyMap()
@@ -95,17 +101,18 @@ func New(ctx context.Context, cfg *config.Config, f Filter) Model {
 	branches.AdditionalFullHelpKeys = branchKeys.shortHelp
 
 	return Model{
-		ctx:        ctx,
-		cfg:        cfg,
-		filter:     f,
-		screen:     screenRepos,
-		repos:      repos,
-		repoKeys:   repoKeys,
-		branches:   branches,
-		branchKeys: branchKeys,
-		styles:     st,
-		byPath:     map[string]int{},
-		loading:    true,
+		ctx:           ctx,
+		cfg:           cfg,
+		filter:        f,
+		screen:        screenRepos,
+		repos:         repos,
+		repoKeys:      repoKeys,
+		branches:      branches,
+		branchKeys:    branchKeys,
+		styles:        st,
+		byPath:        map[string]int{},
+		loading:       true,
+		autoDrillPath: autoDrillPath,
 	}
 }
 
@@ -138,7 +145,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err
 			return m, nil
 		}
-		return m, m.setRepos(msg.repos)
+		cmd := m.setRepos(msg.repos)
+		if m.autoDrillPath != "" {
+			path := m.autoDrillPath
+			m.autoDrillPath = ""
+			if drill := m.autoDrillInto(path); drill != nil {
+				return m, tea.Batch(cmd, drill)
+			}
+		}
+		return m, cmd
 
 	case statusesLoadedMsg:
 		m.statusBusy = false
@@ -381,16 +396,47 @@ func (m Model) drillIn() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	// Compute the command before returning m: Go evaluates a return list left
+	// to right, so `return m, m.drillInto(sel)` would copy m before drillInto's
+	// mutations landed.
+	cmd := m.drillInto(sel)
+	return m, cmd
+}
+
+// drillInto switches to the branch screen for the given repository and kicks
+// off its async branch load. Shared by drillIn (explicit enter) and
+// autoDrillInto (startup auto-navigation).
+func (m *Model) drillInto(sel repoItem) tea.Cmd {
 	m.screen = screenBranches
 	m.activeRepo = sel.repo
 	m.branches.ResetFilter()
 	m.branches.Title = sel.title()
 	m.branchBusy = true
-	return m, tea.Batch(
+	return tea.Batch(
 		m.branches.SetItems(nil),
 		m.branches.StartSpinner(),
 		loadBranchesCmd(m.ctx, sel.repo),
 	)
+}
+
+// autoDrillInto drills into the repository at path, if it is in the currently
+// loaded repo list, and selects its row so esc returns to it highlighted.
+// Returns nil if path doesn't match any loaded repo.
+func (m *Model) autoDrillInto(path string) tea.Cmd {
+	idx, ok := m.byPath[path]
+	if !ok {
+		return nil
+	}
+	items := m.repos.Items()
+	if idx >= len(items) {
+		return nil
+	}
+	it, ok := items[idx].(repoItem)
+	if !ok {
+		return nil
+	}
+	m.repos.Select(idx)
+	return m.drillInto(it)
 }
 
 // back returns to the repository list.
@@ -748,8 +794,10 @@ func (m Model) View() tea.View {
 
 // Run launches the interactive app and blocks until the user quits. noColor
 // forces the ASCII color profile so styling is stripped (mirrors --no-color).
-func Run(ctx context.Context, cfg *config.Config, f Filter, noColor bool) error {
-	p := tea.NewProgram(New(ctx, cfg, f), programOpts(ctx, noColor)...)
+// autoDrillPath, if non-empty, drills straight into that repository's branch
+// view once the initial repo load completes.
+func Run(ctx context.Context, cfg *config.Config, f Filter, autoDrillPath string, noColor bool) error {
+	p := tea.NewProgram(New(ctx, cfg, f, autoDrillPath), programOpts(ctx, noColor)...)
 	_, err := p.Run()
 	return err
 }

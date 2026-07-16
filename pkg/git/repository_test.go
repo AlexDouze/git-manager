@@ -446,6 +446,55 @@ func TestIsGitRepo(t *testing.T) {
 	})
 }
 
+func TestFindRepoRoot(t *testing.T) {
+	t.Run("start dir is a repo", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		root, ok := FindRepoRoot(dir)
+		if !ok {
+			t.Fatal("FindRepoRoot() ok = false, want true")
+		}
+		wantRoot, err := filepath.Abs(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if root != wantRoot {
+			t.Errorf("FindRepoRoot() root = %q, want %q", root, wantRoot)
+		}
+	})
+
+	t.Run("nested subdir walks up to repo root", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		sub := filepath.Join(dir, "a", "b", "c")
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		root, ok := FindRepoRoot(sub)
+		if !ok {
+			t.Fatal("FindRepoRoot() ok = false, want true")
+		}
+		wantRoot, err := filepath.Abs(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if root != wantRoot {
+			t.Errorf("FindRepoRoot() root = %q, want %q", root, wantRoot)
+		}
+	})
+
+	t.Run("no git ancestor", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, ok := FindRepoRoot(dir); ok {
+			t.Error("FindRepoRoot() ok = true, want false when no ancestor is a git repo")
+		}
+	})
+}
+
 func TestUpdate(t *testing.T) {
 	// All subtests use /tmp so os.Stat passes in Repository.Status().
 	// Mocks handle all git commands needed by the real Update() method.

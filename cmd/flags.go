@@ -17,3 +17,8 @@ func (f *FilterFlags) Register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.Repo, "repo", "", "Filter repositories by name")
 	cmd.Flags().StringVar(&f.Path, "path", "", "Filter repositories by path")
 }
+
+// empty reports whether no filter flag was set.
+func (f FilterFlags) empty() bool {
+	return f.Host == "" && f.Org == "" && f.Repo == "" && f.Path == ""
+}

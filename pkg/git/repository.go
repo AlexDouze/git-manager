@@ -851,6 +851,25 @@ func IsGitRepo(path string) bool {
 	return err == nil
 }
 
+// FindRepoRoot walks up from startDir (inclusive) and returns the absolute path
+// of the nearest ancestor that is a git repository, reporting whether one was found.
+func FindRepoRoot(startDir string) (string, bool) {
+	dir, err := filepath.Abs(startDir)
+	if err != nil {
+		return "", false
+	}
+	for {
+		if IsGitRepo(dir) {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
 // CreateRepositoryFromPath creates a Repository object from a path
 func CreateRepositoryFromPath(path string) (*Repository, error) {
 	absPath, err := filepath.Abs(path)

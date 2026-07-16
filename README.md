@@ -117,6 +117,12 @@ gitm
 gitm --org username
 ```
 
+Running `gitm` with no flags from inside one of your managed repositories (or
+any of its subdirectories) opens straight into that repo's branch view instead
+of the full list; press `esc` to go back to the full list. Passing any filter
+flag (`--host`, `--org`, `--repo`, `--path`) always opens the (filtered) list
+instead.
+
 The repository list loads instantly and status badges (dirty, behind, gone,
 no-remote, stale, stash count) fill in asynchronously so the UI stays
 responsive.
