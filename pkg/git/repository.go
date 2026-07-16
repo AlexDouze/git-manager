@@ -92,12 +92,15 @@ func (r *Repository) execGitCommand(ctx context.Context, stdout bool, args ...st
 func ParseURL(url string) (*Repository, error) {
 	repo := NewRepository()
 
+	// Trim a trailing slash (e.g. ".../repo/") before stripping .git; otherwise
+	// the trailing empty segment yields an empty repository name.
+	url = strings.TrimRight(url, "/")
 	// Remove trailing .git if present
 	url = strings.TrimSuffix(url, ".git")
 
-	// Handle SSH URLs (git@github.com:org/repo)
+	// Handle SSH URLs (git@github.com:org/repo, or git@gitlab.com:group/sub/repo)
 	if strings.HasPrefix(url, "git@") {
-		parts := strings.Split(url, ":")
+		parts := strings.SplitN(url, ":", 2)
 		if len(parts) != 2 {
 			return nil, errors.New("invalid SSH git URL format")
 		}
@@ -109,12 +112,14 @@ func ParseURL(url string) (*Repository, error) {
 			return nil, errors.New("invalid repository path in SSH URL")
 		}
 
-		repo.Organization = pathParts[0]
+		// Everything before the last segment is the organization/group path.
+		// GitLab supports nested subgroups (group/sub/repo).
+		repo.Organization = strings.Join(pathParts[:len(pathParts)-1], "/")
 		repo.Name = pathParts[len(pathParts)-1]
 		return repo, nil
 	}
 
-	// Handle HTTPS URLs (https://github.com/org/repo)
+	// Handle HTTPS URLs (https://github.com/org/repo, or nested subgroups)
 	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") {
 		// Remove protocol prefix
 		urlWithoutProtocol := strings.TrimPrefix(strings.TrimPrefix(url, "https://"), "http://")
@@ -125,7 +130,8 @@ func ParseURL(url string) (*Repository, error) {
 		}
 
 		repo.Host = parts[0]
-		repo.Organization = parts[1]
+		// Everything between host and the last segment is the org/group path.
+		repo.Organization = strings.Join(parts[1:len(parts)-1], "/")
 		repo.Name = parts[len(parts)-1]
 		return repo, nil
 	}
@@ -856,6 +862,36 @@ func CreateRepositoryFromPath(path string) (*Repository, error) {
 	return repo, nil
 }
 
+// repositoryFromRelPath derives a Repository from a git repo path located under
+// rootDir, using its path relative to the root: the first segment is the host,
+// the last is the repository name, and everything in between is the
+// organization/group (which may be several segments deep for GitLab subgroups,
+// e.g. host/group/sub/repo). If p is not under rootDir or the layout has too few
+// segments, it falls back to CreateRepositoryFromPath.
+func repositoryFromRelPath(rootDir, p string) (*Repository, error) {
+	rel, err := filepath.Rel(rootDir, p)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return CreateRepositoryFromPath(p)
+	}
+
+	segments := strings.Split(rel, string(os.PathSeparator))
+	if len(segments) < 3 {
+		return CreateRepositoryFromPath(p)
+	}
+
+	absPath, err := filepath.Abs(p)
+	if err != nil {
+		return nil, err
+	}
+
+	repo := NewRepository()
+	repo.Host = segments[0]
+	repo.Organization = strings.Join(segments[1:len(segments)-1], "/")
+	repo.Name = segments[len(segments)-1]
+	repo.Path = absPath
+	return repo, nil
+}
+
 // FindRepositories finds repositories based on filters
 func FindRepositories(rootDir, host, org, repo, path string) ([]*Repository, error) {
 	var repositories []*Repository
@@ -864,7 +900,7 @@ func FindRepositories(rootDir, host, org, repo, path string) ([]*Repository, err
 	if path != "" {
 		// Check if path is a git repository
 		if IsGitRepo(path) {
-			repository, err := CreateRepositoryFromPath(path)
+			repository, err := repositoryFromRelPath(rootDir, path)
 			if err != nil {
 				return nil, err
 			}
@@ -877,7 +913,7 @@ func FindRepositories(rootDir, host, org, repo, path string) ([]*Repository, err
 				}
 
 				if d.IsDir() && IsGitRepo(p) {
-					repository, err := CreateRepositoryFromPath(p)
+					repository, err := repositoryFromRelPath(rootDir, p)
 					if err != nil {
 						return err
 					}
@@ -903,7 +939,7 @@ func FindRepositories(rootDir, host, org, repo, path string) ([]*Repository, err
 		}
 
 		if d.IsDir() && IsGitRepo(p) {
-			repository, err := CreateRepositoryFromPath(p)
+			repository, err := repositoryFromRelPath(rootDir, p)
 			if err != nil {
 				return err
 			}

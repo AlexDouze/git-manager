@@ -54,7 +54,7 @@ func TestListGitHubRepositoriesWithExecutor(t *testing.T) {
 	}
 
 	// Call the function with the mock executor
-	repos, err := ListGitHubRepositoriesWithExecutor(context.Background(), "user1", mockExecutor)
+	repos, err := ListGitHubRepositoriesWithExecutor(context.Background(), "user1", 1000, mockExecutor)
 
 	// Verify there was no error
 	if err != nil {
@@ -94,7 +94,7 @@ func TestListGitHubRepositoriesWithExecutorNoOwner(t *testing.T) {
 	}
 
 	// Call the function with no owner
-	_, err := ListGitHubRepositoriesWithExecutor(context.Background(), "", mockExecutor)
+	_, err := ListGitHubRepositoriesWithExecutor(context.Background(), "", 1000, mockExecutor)
 
 	// Verify there was no error
 	if err != nil {
@@ -103,6 +103,23 @@ func TestListGitHubRepositoriesWithExecutorNoOwner(t *testing.T) {
 
 	// Verify the correct arguments were passed to the executor (no owner)
 	expectedArgs := []string{"repo", "list", "--json", "name,owner", "--limit", "1000"}
+	if !reflect.DeepEqual(mockExecutor.CalledWith, expectedArgs) {
+		t.Errorf("Expected args %v, got %v", expectedArgs, mockExecutor.CalledWith)
+	}
+}
+
+func TestListGitHubRepositoriesWithExecutorLimit(t *testing.T) {
+	mockExecutor := &MockGithubCommandExecutor{
+		MockOutput: []byte("[]"),
+		MockError:  nil,
+	}
+
+	_, err := ListGitHubRepositoriesWithExecutor(context.Background(), "user1", 5, mockExecutor)
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
+	}
+
+	expectedArgs := []string{"repo", "list", "user1", "--json", "name,owner", "--limit", "5"}
 	if !reflect.DeepEqual(mockExecutor.CalledWith, expectedArgs) {
 		t.Errorf("Expected args %v, got %v", expectedArgs, mockExecutor.CalledWith)
 	}

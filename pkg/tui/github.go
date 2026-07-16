@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/alexDouze/gitm/pkg/git"
@@ -11,12 +12,17 @@ import (
 type item struct {
 	Repo     git.Repository
 	Selected bool
+	Existing bool
 }
 
-func SelectGithubReposRender(repos []git.Repository) ([]git.Repository, error) {
+// SelectGithubReposRender presents a filterable picker of repositories. Any repo
+// whose "host/org/name" key is present in existing is shown as already cloned and
+// cannot be selected.
+func SelectGithubReposRender(repos []git.Repository, existing map[string]bool) ([]git.Repository, error) {
 	var items []item
 	for _, repo := range repos {
-		items = append(items, item{Repo: repo, Selected: false})
+		key := fmt.Sprintf("%s/%s/%s", repo.Host, repo.Organization, repo.Name)
+		items = append(items, item{Repo: repo, Selected: false, Existing: existing[key]})
 	}
 
 	app := tview.NewApplication()
@@ -44,8 +50,14 @@ func SelectGithubReposRender(repos []git.Repository) ([]git.Repository, error) {
 				prefix = "[✓] "
 			}
 
+			name := item.Repo.Name
+			if item.Existing {
+				prefix = "[-] "
+				name += " (already cloned)"
+			}
+
 			// Add the item to the list without alphabetical shortcut
-			list.AddItem(prefix+item.Repo.Name, "", 0, nil)
+			list.AddItem(prefix+name, "", 0, nil)
 		}
 	}
 
@@ -110,7 +122,8 @@ func SelectGithubReposRender(repos []git.Repository) ([]git.Repository, error) {
 					}
 				}
 
-				if actualIndex >= 0 {
+				// Refuse to select repositories that are already cloned.
+				if actualIndex >= 0 && !items[actualIndex].Existing {
 					items[actualIndex].Selected = !items[actualIndex].Selected
 					updateList()
 					list.SetCurrentItem(currentIndex) // Maintain selection position

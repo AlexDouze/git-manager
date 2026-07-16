@@ -3,6 +3,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -62,5 +63,14 @@ func initConfig() {
 
 	viper.AutomaticEnv()
 
-	viper.ReadInConfig()
+	// A missing config file is fine (defaults apply). Any other read error means
+	// the file exists but is broken (bad YAML, unreadable) — running with silent
+	// defaults against the wrong root directory is worse than failing loudly.
+	if err := viper.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
+			fmt.Fprintf(os.Stderr, "failed to read config file %s: %v\n", viper.ConfigFileUsed(), err)
+			os.Exit(1)
+		}
+	}
 }

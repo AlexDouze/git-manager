@@ -3,11 +3,34 @@ package cmd
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/alexDouze/gitm/pkg/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
+
+// validConfigKeys maps the lowercased form of every known config key to its
+// canonical spelling. viper is case-insensitive, so input is matched that way.
+var validConfigKeys = map[string]string{
+	"rootdirectory":        "rootDirectory",
+	"clone.defaultoptions": "clone.defaultOptions",
+}
+
+// canonicalConfigKey resolves user-supplied input to a canonical config key.
+// It returns an error listing valid keys if the input is not recognized.
+func canonicalConfigKey(key string) (string, error) {
+	if canonical, ok := validConfigKeys[strings.ToLower(key)]; ok {
+		return canonical, nil
+	}
+	valid := make([]string, 0, len(validConfigKeys))
+	for _, canonical := range validConfigKeys {
+		valid = append(valid, canonical)
+	}
+	sort.Strings(valid)
+	return "", fmt.Errorf("unknown configuration key %q; valid keys are: %s", key, strings.Join(valid, ", "))
+}
 
 var configCmd = &cobra.Command{
 	Use:   "config",
@@ -47,7 +70,10 @@ var configGetCmd = &cobra.Command{
 		}
 
 		// Show specific configuration key
-		key := args[0]
+		key, err := canonicalConfigKey(args[0])
+		if err != nil {
+			return err
+		}
 		value := viper.Get(key)
 		if value == nil {
 			return fmt.Errorf("configuration key not found: %s", key)
@@ -64,7 +90,10 @@ var configSetCmd = &cobra.Command{
 	Long:  `Set the value of a configuration key.`,
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		key := args[0]
+		key, err := canonicalConfigKey(args[0])
+		if err != nil {
+			return err
+		}
 		value := args[1]
 
 		viper.Set(key, value)

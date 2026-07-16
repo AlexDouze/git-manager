@@ -3,6 +3,8 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/alexDouze/gitm/pkg/config"
@@ -14,6 +16,7 @@ import (
 var (
 	ghCloneOwner   string
 	ghCloneRootDir string
+	ghCloneLimit   int
 )
 
 var ghCloneCmd = &cobra.Command{
@@ -56,7 +59,7 @@ Examples:
 		}
 
 		// List repositories using GitHub CLI
-		repos, err := git.ListGitHubRepositories(cmd.Context(), ghCloneOwner)
+		repos, err := git.ListGitHubRepositories(cmd.Context(), ghCloneOwner, ghCloneLimit)
 		if err != nil {
 			return fmt.Errorf("failed to list repositories: %w", err)
 		}
@@ -65,7 +68,18 @@ Examples:
 			fmt.Println("No repositories found.")
 			return nil
 		}
-		selectedRepos, err := tui.SelectGithubReposRender(repos)
+
+		// Flag repositories that already exist on disk so the picker can show
+		// them as cloned and refuse to select them.
+		existing := make(map[string]bool, len(repos))
+		for _, repo := range repos {
+			dir := filepath.Join(targetDir, repo.Host, repo.Organization, repo.Name)
+			if _, statErr := os.Stat(dir); statErr == nil {
+				existing[fmt.Sprintf("%s/%s/%s", repo.Host, repo.Organization, repo.Name)] = true
+			}
+		}
+
+		selectedRepos, err := tui.SelectGithubReposRender(repos, existing)
 		if err != nil {
 			return fmt.Errorf("failed to select repositories: %w", err)
 		}
@@ -91,4 +105,5 @@ func init() {
 	rootCmd.AddCommand(ghCloneCmd)
 	ghCloneCmd.Flags().StringVar(&ghCloneOwner, "owner", "", "GitHub organization or username")
 	ghCloneCmd.Flags().StringVar(&ghCloneRootDir, "root-dir", "", "Root directory for cloning repositories")
+	ghCloneCmd.Flags().IntVar(&ghCloneLimit, "limit", 1000, "Maximum number of repositories to list")
 }
