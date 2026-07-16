@@ -29,3 +29,23 @@ func newRepoKeyMap() repoKeyMap {
 func (k repoKeyMap) shortHelp() []key.Binding {
 	return []key.Binding{k.Enter, k.Refresh}
 }
+
+// branchKeyMap holds the shortcuts active on the branch-list screen. Navigation,
+// filtering, and quit come from the list component; Back returns to the repo
+// list.
+type branchKeyMap struct {
+	Back key.Binding
+}
+
+func newBranchKeyMap() branchKeyMap {
+	return branchKeyMap{
+		Back: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("esc", "back"),
+		),
+	}
+}
+
+func (k branchKeyMap) shortHelp() []key.Binding {
+	return []key.Binding{k.Back}
+}
