@@ -438,7 +438,7 @@ func (m Model) pruneSelectedRepo() (tea.Model, tea.Cmd) {
 	}
 	path := sel.repo.Path
 	m.confirm = &confirmState{
-		prompt: "Prune gone branches in " + sel.repo.Name + "?",
+		prompt: "Force-delete gone branches in " + sel.repo.Name + "? (may discard unmerged commits)",
 		onAccept: func(m *Model) tea.Cmd {
 			return m.setRepoBusy(path, "pruning…")
 		},
@@ -470,7 +470,7 @@ func (m Model) pruneAllRepos() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.confirm = &confirmState{
-		prompt: fmt.Sprintf("Prune gone branches in %d repositories?", len(repos)),
+		prompt: fmt.Sprintf("Force-delete gone branches in %d repositories? (may discard unmerged commits)", len(repos)),
 		onAccept: func(m *Model) tea.Cmd {
 			m.bulkBusy = true
 			m.footer = fmt.Sprintf("pruning %d repositories…", len(repos))
