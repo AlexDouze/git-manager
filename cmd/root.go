@@ -10,6 +10,10 @@ import (
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"golang.org/x/term"
+
+	"github.com/alexDouze/gitm/pkg/config"
+	"github.com/alexDouze/gitm/pkg/tui/app"
 )
 
 // Version information (set by goreleaser)
@@ -21,17 +25,44 @@ var (
 
 var cfgFile string
 var noColor bool
+var rootFilters FilterFlags
 
 var rootCmd = &cobra.Command{
 	Use:   "gitm",
 	Short: "A multi-git repository manager",
 	Long: `gitm is a CLI tool for managing multiple git repositories
-from different hosts (GitHub, GitLab, etc.) with a structured folder hierarchy.`,
+from different hosts (GitHub, GitLab, etc.) with a structured folder hierarchy.
+
+Run without a subcommand to open the interactive TUI: a filterable list of your
+local repositories with drill-in to branches and shortcuts for refresh, update,
+prune, and clone.`,
 	Version: Version,
+	// Cobra treats unknown positional args as an error before RunE; SilenceUsage
+	// keeps a TUI launch failure from dumping the usage text over the alt-screen.
+	SilenceUsage: true,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		if noColor {
 			color.NoColor = true
 		}
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// The interactive app needs a real terminal. When stdout isn't a TTY
+		// (piped, redirected, CI), print help instead so pipelines stay sane.
+		if !term.IsTerminal(int(os.Stdout.Fd())) {
+			return cmd.Help()
+		}
+
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			return fmt.Errorf("failed to load configuration: %w", err)
+		}
+
+		return app.Run(cmd.Context(), cfg, app.Filter{
+			Host: rootFilters.Host,
+			Org:  rootFilters.Org,
+			Repo: rootFilters.Repo,
+			Path: rootFilters.Path,
+		})
 	},
 }
 
@@ -43,6 +74,8 @@ func init() {
 	cobra.OnInitialize(initConfig)
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.gitm.yaml)")
 	rootCmd.PersistentFlags().BoolVar(&noColor, "no-color", false, "Disable colored output")
+	// Filter flags on the bare `gitm` command pre-scope the interactive app.
+	rootFilters.Register(rootCmd)
 }
 
 func initConfig() {
