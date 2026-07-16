@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"golang.org/x/term"
 
 	"github.com/alexDouze/gitm/pkg/config"
+	"github.com/alexDouze/gitm/pkg/tui"
 	"github.com/alexDouze/gitm/pkg/tui/app"
 )
 
@@ -42,7 +42,7 @@ prune, and clone.`,
 	SilenceUsage: true,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		if noColor {
-			color.NoColor = true
+			tui.SetNoColor(true)
 		}
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -62,7 +62,7 @@ prune, and clone.`,
 			Org:  rootFilters.Org,
 			Repo: rootFilters.Repo,
 			Path: rootFilters.Path,
-		})
+		}, noColor)
 	},
 }
 

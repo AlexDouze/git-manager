@@ -392,11 +392,12 @@ func (p ghProgram) View() tea.View {
 
 // RunBrowse launches the GitHub clone browser standalone. owner, when
 // non-empty, skips the input prompt and lists that owner immediately. rootDir
-// overrides cfg.RootDirectory as the clone destination when set.
-func RunBrowse(ctx context.Context, cfg *config.Config, owner, rootDir string, limit int) error {
+// overrides cfg.RootDirectory as the clone destination when set. noColor forces
+// the ASCII color profile so styling is stripped (mirrors --no-color).
+func RunBrowse(ctx context.Context, cfg *config.Config, owner, rootDir string, limit int, noColor bool) error {
 	st := newStyles()
 	gh := newGHScreen(ctx, cfg, st, owner, rootDir, limit)
-	p := tea.NewProgram(ghProgram{gh: gh}, tea.WithContext(ctx))
+	p := tea.NewProgram(ghProgram{gh: gh}, programOpts(ctx, noColor)...)
 	_, err := p.Run()
 	return err
 }

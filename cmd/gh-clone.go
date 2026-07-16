@@ -46,7 +46,7 @@ Examples:
 		// Launch the interactive GitHub clone browser. It lists the owner's
 		// repositories, lets the user multi-select, and clones the selection
 		// into rootDir/host/org/name (skipping any already on disk).
-		return app.RunBrowse(cmd.Context(), cfg, ghCloneOwner, ghCloneRootDir, ghCloneLimit)
+		return app.RunBrowse(cmd.Context(), cfg, ghCloneOwner, ghCloneRootDir, ghCloneLimit, noColor)
 	},
 }
 
